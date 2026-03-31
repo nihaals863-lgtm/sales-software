@@ -1,0 +1,14 @@
+PrismaClientKnownRequestError: 
+Invalid `prisma.lead.findMany()` invocation in
+C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\diagnostic.js:8:41
+
+  5 async function test() {
+  6     try {
+  7         console.log("Running direct prisma findMany test...");
+→ 8         const leads = await prisma.lead.findMany(
+The column `sales_software.leads.lead_no` does not exist in the current database.
+    at ei.handleRequestError (C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\node_modules\@prisma\client\runtime\library.js:121:7268)
+    at ei.handleAndLogRequestError (C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\node_modules\@prisma\client\runtime\library.js:121:6593)
+    at ei.request (C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\node_modules\@prisma\client\runtime\library.js:121:6300)
+    at async a (C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async test (C:\Users\pcc\OneDrive\Desktop\kiaan project\sales-software\sales-backend\diagnostic.js:8:23)

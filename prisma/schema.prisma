@@ -1,0 +1,310 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String           @id @default(uuid())
+  name            String
+  email           String           @unique
+  phone           String           @unique
+  password        String
+  role            Role             @default(CUSTOMER)
+  isAvailable     Boolean          @default(true) @map("is_available")
+  lat             Float?
+  lng             Float?
+  fcmToken        String?          @map("fcm_token")
+  address         String?          @db.Text
+  city            String?
+  state           String?
+  pincode         String?
+  rating          Float            @default(0.0)
+  completedJobs   Int              @default(0) @map("completed_jobs")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  jobsAsCustomer  Job[]            @relation("CustomerJobs")
+  jobsAsWorker    Job[]            @relation("WorkerJobs")
+  leadsAsCustomer Lead[]           @relation("CustomerLeads")
+  categories      WorkerCategory[]
+  planId          String?          @map("plan_id")
+  subscriptionExpiresAt DateTime?    @map("subscription_expires_at")
+  plan            SubscriptionPlan? @relation(fields: [planId], references: [id])
+  businessName    String?          @map("business_name")
+  bio             String?          @db.Text
+  availability    String?
+  experience      String?
+  serviceRadius   Int?             @default(15) @map("service_radius")
+
+  @@map("users")
+  subscriptionUpgradeRequests SubscriptionUpgradeRequest[]
+  notifications               Notification[]
+  messagesSent                Message[]        @relation("MessageSender")
+}
+
+model Category {
+  id        String           @id @default(uuid())
+  name      String           @unique
+  icon      String?
+  createdAt DateTime         @default(now()) @map("created_at")
+  leads     Lead[]
+  workers   WorkerCategory[]
+
+  @@map("categories")
+}
+
+model WorkerCategory {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  categoryId String   @map("category_id")
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@index([categoryId], map: "worker_categories_category_id_fkey")
+  @@map("worker_categories")
+}
+
+model Lead {
+  id          String     @id @default(uuid())
+  leadNo      String     @unique @default(cuid()) @map("lead_no") // Short friendly ID
+  customerId  String     @map("customer_id")
+  categoryId  String     @map("category_id")
+  location    String
+  description String?    @db.Text
+  servicePlan String     @default("Starter") @map("service_plan")
+  preferredDate String?  @map("preferred_date")
+  status      LeadStatus @default(OPEN)
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+  job         Job?
+  category    Category   @relation(fields: [categoryId], references: [id])
+  customer    User       @relation("CustomerLeads", fields: [customerId], references: [id])
+
+  @@index([categoryId], map: "leads_category_id_fkey")
+  @@index([customerId], map: "leads_customer_id_fkey")
+  @@map("leads")
+}
+
+model Job {
+  id            String         @id @default(uuid())
+  jobNo         String         @unique @default(cuid()) @map("job_no") // Short friendly ID
+  leadId        String?        @unique @map("lead_id")
+  customerId    String         @map("customer_id")
+  workerId      String         @map("worker_id")
+  categoryName  String         @map("category_name")
+  status        JobStatus      @default(SCHEDULED)
+  location      String
+  description   String?        @db.Text
+  preferredDate String?        @map("preferred_date")
+  scheduledDate DateTime       @map("scheduled_date")
+  scheduledTime String         @map("scheduled_time")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  contract      JobContract?
+  estimate      JobEstimate?
+  inspection    JobInspection?
+  invoice       JobInvoice?
+  photos        JobPhoto[]
+  customer      User           @relation("CustomerJobs", fields: [customerId], references: [id])
+  lead          Lead?          @relation(fields: [leadId], references: [id])
+  worker        User           @relation("WorkerJobs", fields: [workerId], references: [id])
+  review        Review?
+  chat          Chat?
+
+  @@index([customerId], map: "jobs_customer_id_fkey")
+  @@index([workerId], map: "jobs_worker_id_fkey")
+  @@map("jobs")
+}
+
+model JobPhoto {
+  id        String   @id @default(uuid())
+  jobId     String   @map("job_id")
+  url       String
+  type      String   @default("BEFORE")
+  createdAt DateTime @default(now()) @map("created_at")
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId], map: "job_photos_job_id_fkey")
+  @@map("job_photos")
+}
+
+model JobInspection {
+  id        String   @id @default(uuid())
+  jobId     String   @unique @map("job_id")
+  notes     String   @db.Text
+  signature String?
+  createdAt DateTime @default(now()) @map("created_at")
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_inspections")
+}
+
+model JobEstimate {
+  id         String   @id @default(uuid())
+  jobId      String   @unique @map("job_id")
+  amount     Float
+  details    String   @db.Text
+  isApproved Boolean  @default(false) @map("is_approved")
+  createdAt  DateTime @default(now()) @map("created_at")
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_estimates")
+}
+
+model JobContract {
+  id                String   @id @default(uuid())
+  jobId             String   @unique @map("job_id")
+  documentUrl       String   @map("document_url")
+  signedByCustomer  Boolean  @default(false) @map("signed_by_customer")
+  customerSignature String?  @map("customer_signature")
+  createdAt         DateTime @default(now()) @map("created_at")
+  job               Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_contracts")
+}
+
+model JobInvoice {
+  id        String   @id @default(uuid())
+  jobId     String   @unique @map("job_id")
+  amount    Float
+  status    String   @default("UNPAID")
+  paymentId String?  @map("payment_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_invoices")
+}
+
+enum Role {
+  ADMIN
+  WORKER
+  CUSTOMER
+}
+
+enum JobStatus {
+  SCHEDULED
+  ACCEPTED
+  REJECTED
+  IN_PROGRESS
+  ESTIMATED
+  INVOICED
+  COMPLETED
+  CANCELLED
+}
+
+enum LeadStatus {
+  OPEN
+  ASSIGNED
+  REJECTED
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  name      String
+  city      String
+  state     String
+  country   String   @default("USA")
+  status    String   @default("Active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("locations")
+}
+
+model SubscriptionPlan {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  price     Float
+  leads     Int      @default(0) // 0 for unlimited
+  features  String?  @db.Text // JSON string of features
+  createdAt DateTime @default(now()) @map("created_at")
+  users     User[]
+
+  @@map("subscription_plans")
+  upgradeRequests SubscriptionUpgradeRequest[]
+}
+
+model SubscriptionUpgradeRequest {
+  id              String           @id @default(uuid())
+  userId          String           @map("user_id")
+  planId          String           @map("plan_id")
+  status          String           @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan            SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@map("subscription_upgrade_requests")
+}
+
+model ProfessionalRequest {
+  id              String   @id @default(uuid())
+  name            String
+  businessName    String?  @map("business_name")
+  email           String   @unique
+  phone           String
+  category        String
+  address         String?  @db.Text
+  city            String?
+  state           String?
+  pincode         String?
+  preferredPlan   String   @map("preferred_plan")
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("professional_requests")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id") // null means system-wide or admin-targeted
+  title     String
+  message   String   @db.Text
+  type      String   @default("INFO") // INFO, SUCCESS, WARNING, ERROR, LEAD, ASSIGNMENT
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+model Review {
+  id          String   @id @default(uuid())
+  jobId       String   @unique @map("job_id")
+  rating      Int      @default(5)
+  comment     String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("reviews")
+}
+
+model Chat {
+  id          String    @id @default(uuid())
+  jobId       String    @unique @map("job_id")
+  lastMessage String?   @db.Text @map("last_message")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  job         Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages    Message[]
+
+  @@map("chats")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  chatId    String   @map("chat_id")
+  senderId  String   @map("sender_id")
+  text      String   @db.Text
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender    User     @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@map("messages")
+}
