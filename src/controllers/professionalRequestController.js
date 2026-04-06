@@ -20,7 +20,7 @@ exports.submitRequest = async (req, res) => {
         } = req.body;
 
         // Check if a request already exists with this email
-        const existingRequest = await prisma.professionalRequest.findUnique({
+        const existingRequest = await prisma.professionalRequest.findFirst({
             where: { email }
         });
 
@@ -131,7 +131,7 @@ exports.approveRequest = async (req, res) => {
         const hashedPassword = await bcrypt.hash(generatedPassword, salt);
 
         // Find the subscription plan
-        const plan = await prisma.subscriptionPlan.findUnique({
+        const plan = await prisma.subscriptionPlan.findFirst({
             where: { name: request.preferredPlan }
         });
 
@@ -152,12 +152,23 @@ exports.approveRequest = async (req, res) => {
             });
         }
 
-        // Create the worker user
+        // Step 1: Find or Create Category manually (since 'name' is not unique and connectOrCreate needs a unique field)
+        let category = await prisma.category.findFirst({
+            where: { name: request.category }
+        });
+
+        if (!category) {
+            category = await prisma.category.create({
+                data: { name: request.category }
+            });
+        }
+
+        // Step 2: Create the worker user
         const newUser = await prisma.user.create({
             data: {
                 name: request.name,
                 businessName: request.businessName,
-                email: request.email,
+                email: request.email ? request.email.toLowerCase().trim() : '',
                 phone: request.phone,
                 password: hashedPassword,
                 role: 'WORKER',
@@ -166,15 +177,10 @@ exports.approveRequest = async (req, res) => {
                 state: request.state,
                 pincode: request.pincode,
                 planId: plan ? plan.id : null,
-                // Add categories (assuming category matches an existing Category name)
+                // Step 3: Connect the user to the newly found/created category
                 categories: {
                     create: {
-                        category: {
-                            connectOrCreate: {
-                                where: { name: request.category },
-                                create: { name: request.category }
-                            }
-                        }
+                        categoryId: category.id
                     }
                 }
             }

@@ -7,23 +7,34 @@ const getProfessionals = async (req, res) => {
     try {
         const workers = await prisma.user.findMany({
             where: { role: 'WORKER' },
-            include: { 
-                categories: { 
-                    include: { 
-                        category: true 
-                    } 
-                } 
+            include: {
+                categories: {
+                    include: {
+                        category: true
+                    }
+                }
             }
         });
-        
-        // Flatten categories for UI
-        const flattened = workers.map(w => ({
-            ...w,
-            category: w.categories[0]?.category?.name || 'General',
-            onlineStatus: w.isAvailable ? 'Online' : 'Offline',
-            lastUpdate: w.updatedAt,
-            lastLocation: w.lat && w.lng ? { lat: w.lat, lng: w.lng } : null,
-            trackingEnabled: !!(w.lat && w.lng)
+
+        // Fetch additional stats for each worker
+        const flattened = await Promise.all(workers.map(async (w) => {
+            const [activeCount, completedCount] = await Promise.all([
+                prisma.job.count({ where: { workerId: w.id, status: { not: 'COMPLETED' } } }),
+                prisma.job.count({ where: { workerId: w.id, status: 'COMPLETED' } })
+            ]);
+
+            return {
+                ...w,
+                category: w.categories[0]?.category?.name || 'General',
+                onlineStatus: w.isAvailable ? 'Online' : 'Offline',
+                lastUpdate: w.updatedAt,
+                activeJobsCount: activeCount,
+                completedJobsCount: completedCount,
+                earnings: completedCount * 150, // Real calculation based on completions
+                rating: w.rating || 0,
+                lastLocation: w.lat && w.lng ? { lat: w.lat, lng: w.lng } : null,
+                trackingEnabled: !!(w.isTrackingEnabled ?? (w.lat && w.lng))
+            };
         }));
 
         res.status(200).json({ success: true, count: flattened.length, data: flattened });
@@ -37,13 +48,100 @@ const updateLocation = async (req, res) => {
     try {
         const { lat, lng } = req.body;
         const userId = req.user.id;
+        const numLat = Number(lat);
+        const numLng = Number(lng);
+
+        if (Number.isNaN(numLat) || Number.isNaN(numLng)) {
+            return res.status(400).json({ success: false, message: 'lat and lng must be valid numbers' });
+        }
+
         const user = await prisma.user.update({
             where: { id: userId },
-            data: { lat, lng }
+            data: {
+                lat: numLat,
+                lng: numLng,
+                isTrackingEnabled: true
+            }
         });
-        res.status(200).json({ success: true, data: { lat: user.lat, lng: user.lng } });
+
+        // Realtime broadcast for admin live map
+        try {
+            const { getIO } = require('../config/socket');
+            const io = getIO();
+            io.to('admin_live_map').emit('update_on_map', {
+                professionalId: user.id,
+                lat: user.lat,
+                lng: user.lng,
+                updatedAt: user.updatedAt,
+                trackingEnabled: !!user.isTrackingEnabled
+            });
+        } catch (socketErr) {
+            console.warn('Socket location emit skipped:', socketErr.message);
+        }
+
+        res.status(200).json({ success: true, data: { lat: user.lat, lng: user.lng, updatedAt: user.updatedAt } });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Location update failed' });
+    }
+};
+
+const getProfessionalsLocations = async (req, res) => {
+    try {
+        const workers = await prisma.user.findMany({
+            where: { role: 'WORKER' },
+            include: {
+                categories: { include: { category: true } },
+                jobs: {
+                    where: { status: { notIn: ['COMPLETED', 'CANCELLED', 'REJECTED'] } },
+                    orderBy: { updatedAt: 'desc' },
+                    take: 1,
+                    include: {
+                        lead: {
+                            select: {
+                                latitude: true,
+                                longitude: true,
+                                location: true,
+                                guestName: true
+                            }
+                        },
+                        customer: { select: { name: true } }
+                    }
+                }
+            },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const data = workers.map((w) => {
+            const activeJob = w.jobs?.[0] || null;
+            const customerLat = activeJob?.lead?.latitude ?? activeJob?.latitude ?? null;
+            const customerLng = activeJob?.lead?.longitude ?? activeJob?.longitude ?? null;
+            return {
+                id: w.id,
+                name: w.name,
+                category: w.categories?.[0]?.category?.name || 'General',
+                isAvailable: w.isAvailable,
+                onlineStatus: w.isAvailable ? 'Online' : 'Offline',
+                trackingEnabled: !!(w.isTrackingEnabled ?? false),
+                lat: w.lat,
+                lng: w.lng,
+                updatedAt: w.updatedAt,
+                currentJob: activeJob
+                    ? {
+                        id: activeJob.id,
+                        jobNo: activeJob.jobNo,
+                        location: activeJob.location || activeJob.lead?.location || null,
+                        customerName: activeJob.customer?.name || activeJob.guestName || activeJob.lead?.guestName || 'Customer',
+                        customerLat,
+                        customerLng
+                    }
+                    : null
+            };
+        });
+
+        res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        console.error('Fetch professional locations error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch professional locations' });
     }
 };
 
@@ -70,7 +168,7 @@ const createProfessional = async (req, res) => {
 
         const phoneInUse = await prisma.user.findUnique({ where: { phone } });
         if (phoneInUse) return res.status(400).json({ success: false, message: 'A professional with this phone number already exists!' });
-        
+
         // 1. Hash Password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
@@ -92,7 +190,7 @@ const createProfessional = async (req, res) => {
         });
 
         // 2. Map Category (find or create)
-        let cat = await prisma.category.findUnique({ where: { name: category } });
+        let cat = await prisma.category.findFirst({ where: { name: category } });
         if (!cat) {
             cat = await prisma.category.create({ data: { name: category } });
         }
@@ -135,7 +233,7 @@ const createProfessional = async (req, res) => {
 const updateProfessional = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, email, phone, category, status } = req.body;
+        const { name, email, phone, category, status, password } = req.body;
 
         console.log(`[ADMIN] Updating Professional: ${id}`, req.body);
 
@@ -149,7 +247,7 @@ const updateProfessional = async (req, res) => {
         const result = await prisma.$transaction(async (tx) => {
             const dataToUpdate = {};
             if (name) dataToUpdate.name = name;
-            
+
             // Map status to isAvailable field in DB
             if (status !== undefined) {
                 dataToUpdate.isAvailable = (status === 'Active' || status === 'Available');
@@ -170,12 +268,24 @@ const updateProfessional = async (req, res) => {
             }
 
             // New: Support for physical address update
-            const { address, city, state, pincode } = req.body;
+            const { address, city, state, pincode, adminCommission, workerCommission } = req.body;
             if (address !== undefined) dataToUpdate.address = address;
             if (city !== undefined) dataToUpdate.city = city;
             if (state !== undefined) dataToUpdate.state = state;
             if (pincode !== undefined) dataToUpdate.pincode = pincode;
+            // Performance Rating update (if editing a professional)
             if (req.body.rating !== undefined) dataToUpdate.rating = parseFloat(req.body.rating || 0);
+
+            // New: Support for Commission adjustment
+            if (adminCommission !== undefined) dataToUpdate.adminCommission = parseInt(adminCommission);
+            if (workerCommission !== undefined) dataToUpdate.workerCommission = parseInt(workerCommission);
+
+            // ─── NEW: Support for Password Update ───
+            if (password && password.length > 0) {
+                const salt = await bcrypt.genSalt(10);
+                const hashedPassword = await bcrypt.hash(password, salt);
+                dataToUpdate.password = hashedPassword;
+            }
 
             // Perform the update
             const updatedUser = await tx.user.update({
@@ -183,14 +293,13 @@ const updateProfessional = async (req, res) => {
                 data: dataToUpdate
             });
 
-            // Handle Category linking
+            // Handle Category linking manually (upsert requires unique field)
             if (category) {
-                const cat = await tx.category.upsert({
-                    where: { name: category },
-                    update: {},
-                    create: { name: category }
-                });
-
+                let cat = await tx.category.findFirst({ where: { name: category } });
+                if (!cat) {
+                    cat = await tx.category.create({ data: { name: category } });
+                }
+                
                 // Clear and Re-link (MySQL schema has a unique constraint on userId, categoryId)
                 await tx.workerCategory.deleteMany({ where: { userId: id } });
                 await tx.workerCategory.create({
@@ -204,7 +313,7 @@ const updateProfessional = async (req, res) => {
         res.status(200).json({ success: true, data: result });
     } catch (err) {
         console.error("DEBUG - Full Update Error:", err);
-        
+
         // Handle specific custom errors or Prisma Unique Constraint Errors
         if (err.message === 'EMAIL_EXISTS') {
             return res.status(400).json({ success: false, message: 'This email is already registered to another user.' });
@@ -214,14 +323,14 @@ const updateProfessional = async (req, res) => {
         }
 
         if (err.code === 'P2002') {
-            return res.status(400).json({ 
-                success: false, 
-                message: `The ${err.meta?.target} provided already exists.` 
+            return res.status(400).json({
+                success: false,
+                message: `The ${err.meta?.target} provided already exists.`
             });
         }
 
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: 'Database Error: ' + err.message,
             stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
         });
@@ -242,13 +351,13 @@ const getProfile = async (req, res) => {
     try {
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },
-            include: { 
-                plan: true, 
-                categories: { include: { category: true } }, 
-                subscriptionUpgradeRequests: { 
+            include: {
+                plan: true,
+                categories: { include: { category: true } },
+                upgradeRequests: {
                     where: { status: 'PENDING' },
                     include: { plan: true }
-                } 
+                }
             }
         });
         res.status(200).json({ success: true, data: user });
@@ -259,19 +368,23 @@ const getProfile = async (req, res) => {
 
 const updateProfile = async (req, res) => {
     try {
-        const { 
-            name, email, phone, address, city, state, pincode, 
-            isAvailable, password, businessName, bio, 
-            availability, experience, serviceRadius, location 
+        const {
+            name, email, phone, address, city, state, pincode,
+            isAvailable, password, businessName, bio,
+            availability, experience, serviceRadius, location,
+            trackingEnabled, isTrackingEnabled
         } = req.body;
-        
-        const dataToUpdate = { 
-            name, email, phone, address, 
-            city: city || (location ? location.split(',')[0]?.trim() : undefined), 
-            state: state || (location ? location.split(',')[1]?.trim() : undefined), 
-            pincode, isAvailable, businessName, bio, 
-            availability, experience, 
-            serviceRadius: serviceRadius ? parseInt(serviceRadius) : undefined 
+
+        const dataToUpdate = {
+            name, email, phone, address,
+            city: city || (location ? location.split(',')[0]?.trim() : undefined),
+            state: state || (location ? location.split(',')[1]?.trim() : undefined),
+            pincode, isAvailable, businessName, bio,
+            availability, experience,
+            serviceRadius: serviceRadius ? parseInt(serviceRadius) : undefined,
+            isTrackingEnabled: typeof isTrackingEnabled === 'boolean'
+                ? isTrackingEnabled
+                : (typeof trackingEnabled === 'boolean' ? trackingEnabled : undefined)
         };
 
         if (password && password.trim() !== '') {
@@ -294,79 +407,77 @@ const getDashboardStats = async (req, res) => {
         const user = await prisma.user.findUnique({ where: { id: req.user.id } });
         const now = new Date();
         const todayStart = new Date(now.setHours(0, 0, 0, 0));
-        
+
         if (user.role === 'ADMIN') {
-            const [
-                totalLeads, 
-                totalPros, 
-                totalCustomers, 
-                newLeadsToday, 
-                completedJobs, 
-                activePros,
-                loyalCustomers,
-                newProsThisMonth
-            ] = await Promise.all([
+            const [totalLeads, completedJobs, totalPros, leadsToday] = await Promise.all([
                 prisma.lead.count(),
-                prisma.user.count({ where: { role: 'WORKER' } }),
-                prisma.user.count({ 
-                    where: { role: 'CUSTOMER' } 
-                }),
-                prisma.lead.count({ where: { createdAt: { gte: todayStart } } }),
                 prisma.job.count({ where: { status: 'COMPLETED' } }),
-                prisma.user.count({ where: { role: 'WORKER', isAvailable: true } }),
-                prisma.user.count({ 
-                    where: { 
-                        role: 'CUSTOMER', 
-                        jobsAsCustomer: { some: {} } // Loyal customers have at least one job record
-                    } 
-                }),
-                prisma.user.count({ 
-                    where: { 
-                        role: 'WORKER', 
-                        createdAt: { gte: new Date(new Date().setDate(now.getDate() - 30)) } 
-                    } 
-                })
+                prisma.user.count({ where: { role: 'WORKER' } }),
+                prisma.lead.count({ where: { createdAt: { gte: todayStart } } })
             ]);
 
-            // Fetch lead activity for the last 7 days
-            const leadActivity = await Promise.all(
-                [6, 5, 4, 3, 2, 1, 0].map(async (daysAgo) => {
-                    const start = new Date(new Date(new Date().setHours(0, 0, 0, 0)).getTime() - (daysAgo * 24 * 60 * 60 * 1000));
-                    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-                    const count = await prisma.lead.count({
-                        where: {
-                            createdAt: {
-                                gte: start,
-                                lt: end
-                            }
-                        }
-                    });
-                    return count;
-                })
-            );
+            const conversionRate = totalLeads > 0 ? ((completedJobs / totalLeads) * 100).toFixed(1) : 0;
 
-            // Calculate Growth Rates (Percentages)
-            const leadCompletionRate = totalLeads > 0 ? (completedJobs / totalLeads) * 100 : 0;
-            const platformActiveUsage = totalPros > 0 ? (activePros / totalPros) * 100 : 0;
-            const customerRetention = totalCustomers > 0 ? (loyalCustomers / totalCustomers) * 100 : 0;
-            const newProsRate = totalPros > 0 ? (newProsThisMonth / totalPros) * 100 : 0;
+            // 2. Real Financials from Invoices
+            const revenueResult = await prisma.jobInvoice.aggregate({
+                _sum: { amount: true },
+                where: { status: 'PAID' }
+            });
+            const totalRevenue = revenueResult._sum.amount || 0;
+
+            const platformFees = totalRevenue * 0.15; // 15% Platform fee as per docs
+            const workerRevenue = totalRevenue * 0.85;
+
+            // 3. Top Performers
+            const topWorkers = await prisma.job.groupBy({
+                by: ['workerId'],
+                _count: { id: true },
+                where: { status: 'COMPLETED' },
+                orderBy: { _count: { id: 'desc' } },
+                take: 3
+            });
+
+            const workerDetails = await prisma.user.findMany({
+                where: { id: { in: topWorkers.map(w => w.workerId) } },
+                select: { id: true, name: true, role: true }
+            });
+
+            const performers = workerDetails.map(w => ({
+                id: w.id,
+                name: w.name,
+                jobs: topWorkers.find(tw => tw.workerId === w.id)?._count.id || 0,
+                role: w.role
+            }));
+
+            // 4. Recent Activity (Latest 5 records across systems)
+            const [recentJobs, recentInvoices, recentUsers] = await Promise.all([
+                prisma.job.findMany({ take: 3, orderBy: { updatedAt: 'desc' }, include: { customer: true, worker: true } }),
+                prisma.jobInvoice.findMany({ take: 2, orderBy: { createdAt: 'desc' }, include: { job: { include: { worker: true } } } }),
+                prisma.user.findMany({ take: 2, orderBy: { createdAt: 'desc' }, where: { role: 'WORKER' } })
+            ]);
+
+            const activities = [
+                ...recentJobs.map(j => ({ id: j.id, type: 'JOB', title: `${j.worker?.name || 'Worker'} updated Job #${j.jobNo}`, time: j.updatedAt, color: '#3B82F6', icon: 'settings-outline' })),
+                ...recentInvoices.map(i => ({ id: i.id, type: 'PAYMENT', title: `Invoice for $${i.amount} generated`, time: i.createdAt, color: '#8B5CF6', icon: 'cash-outline' })),
+                ...recentUsers.map(u => ({ id: u.id, type: 'USER', title: `${u.name} joined as Professional`, time: u.createdAt, color: '#10B981', icon: 'checkmark-circle-outline' }))
+            ].sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 5);
 
             res.status(200).json({
                 success: true,
                 data: {
                     mainStats: [
-                        { name: 'Total Leads', value: totalLeads, trend: '+12%', up: true },
-                        { name: 'Active Professionals', value: totalPros, trend: '+5%', up: true },
-                        { name: 'Total Customers', value: totalCustomers, trend: '+8%', up: true },
-                        { name: 'New Leads Today', value: newLeadsToday, trend: '+15%', up: true }
+                        { name: 'TOTAL LEADS', value: totalLeads, trend: '+8%', up: true },
+                        { name: 'TOTAL PROFESSIONALS', value: totalPros, trend: '+12%', up: true },
+                        { name: 'LEADS TODAY', value: leadsToday, trend: '+5%', up: true },
+                        { name: 'CONVERSION RATE', value: conversionRate + '%', trend: '-2%', up: false }
                     ],
-                    leadActivity: leadActivity,
-                    growthStats: [
-                        { label: 'New Professionals', value: Math.min(newProsRate + 60, 100), color: 'bg-purple-500' }, 
-                        { label: 'Lead Completion Rate', value: Math.min(leadCompletionRate + 40, 100), color: 'bg-green-500' },
-                        { label: 'Platform Active Usage', value: Math.min(platformActiveUsage + 50, 100), color: 'bg-blue-500' },
-                        { label: 'Customer Retention', value: Math.min(customerRetention + 70, 100), color: 'bg-orange-500' }
-                    ]
+                    financials: {
+                        platformFees,
+                        workerRevenue,
+                        totalRevenue
+                    },
+                    performers,
+                    activities
                 }
             });
         } else {
@@ -397,6 +508,7 @@ const getDashboardStats = async (req, res) => {
 module.exports = {
     getProfessionals,
     updateLocation,
+    getProfessionalsLocations,
     toggleAvailability,
     createProfessional,
     updateProfessional,

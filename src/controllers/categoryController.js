@@ -30,15 +30,17 @@ const getCategories = async (req, res) => {
 const createCategory = async (req, res) => {
     try {
         const { name, icon } = req.body;
-        const exists = await prisma.category.findUnique({ where: { name } });
+        // Search by First (since name is not a unique field in schema)
+        const exists = await prisma.category.findFirst({ where: { name: name.trim() } });
         if (exists) return res.status(400).json({ success: false, message: 'Category already exists' });
 
         const cat = await prisma.category.create({
-            data: { name, icon }
+            data: { name: name.trim(), icon: icon || 'Package' }
         });
         res.status(201).json({ success: true, data: cat });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Creation failed' });
+        console.error("❌ [API] createCategory Error:", err);
+        res.status(500).json({ success: false, message: 'Category creation failed: ' + err.message });
     }
 };
 
@@ -50,11 +52,12 @@ const updateCategory = async (req, res) => {
 
         const cat = await prisma.category.update({
             where: { id },
-            data: { name, icon }
+            data: { name: name?.trim(), icon }
         });
         res.status(200).json({ success: true, data: cat });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Update failed' });
+        console.error("❌ [API] updateCategory Error:", err);
+        res.status(500).json({ success: false, message: 'Update failed: ' + err.message });
     }
 };
 

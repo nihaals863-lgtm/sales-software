@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../middlewares/authMiddleware');
-const { getChats, getMessages, sendMessage } = require('../controllers/chatController');
+const { protect, optionalProtect } = require('../middlewares/authMiddleware');
+const { getChats, getMessages, sendMessage, getDirectMessages, sendDirectMessage } = require('../controllers/chatController');
 
-router.use(protect);
+// Standard protected user routes
+router.get('/', protect, getChats);
+router.get('/direct/:otherUserId', protect, getDirectMessages);
+router.post('/direct/:otherUserId', protect, sendDirectMessage);
 
-router.get('/', getChats);
-router.get('/:chatId/messages', getMessages);
-router.post('/:chatId/messages', sendMessage);
+// Job-specific chat routes (Allow Guest via optionalProtect + sessionToken logic in controller)
+router.get('/:chatId/messages', optionalProtect, getMessages);
+router.post('/:chatId/messages', optionalProtect, sendMessage);
 
 module.exports = router;

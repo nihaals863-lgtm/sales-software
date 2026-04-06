@@ -7,201 +7,224 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model User {
-  id              String           @id @default(uuid())
-  name            String
-  email           String           @unique
-  phone           String           @unique
-  password        String
-  role            Role             @default(CUSTOMER)
-  isAvailable     Boolean          @default(true) @map("is_available")
-  lat             Float?
-  lng             Float?
-  fcmToken        String?          @map("fcm_token")
-  address         String?          @db.Text
-  city            String?
-  state           String?
-  pincode         String?
-  rating          Float            @default(0.0)
-  completedJobs   Int              @default(0) @map("completed_jobs")
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
-  jobsAsCustomer  Job[]            @relation("CustomerJobs")
-  jobsAsWorker    Job[]            @relation("WorkerJobs")
-  leadsAsCustomer Lead[]           @relation("CustomerLeads")
-  categories      WorkerCategory[]
-  planId          String?          @map("plan_id")
-  subscriptionExpiresAt DateTime?    @map("subscription_expires_at")
-  plan            SubscriptionPlan? @relation(fields: [planId], references: [id])
-  businessName    String?          @map("business_name")
-  bio             String?          @db.Text
-  availability    String?
-  experience      String?
-  serviceRadius   Int?             @default(15) @map("service_radius")
+  id                    String    @id @default(uuid())
+  name                  String
+  email                 String    @unique
+  phone                 String    @unique
+  password              String
+  role                  Role      @default(CUSTOMER)
+  isAvailable           Boolean   @default(true) @map("is_available")
+  isTrackingEnabled     Boolean   @default(false) @map("is_tracking_enabled")
+  lat                   Float?
+  lng                   Float?
+  fcmToken              String?   @map("fcm_token")
+  address               String?   @db.Text
+  city                  String?
+  state                 String?
+  pincode               String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  planId                String?   @map("plan_id")
+  subscriptionExpiresAt DateTime? @map("subscription_expires_at")
+  completedJobs         Int       @default(0) @map("completed_jobs")
+  rating                Float     @default(0)
+  availability          String?
+  bio                   String?   @db.Text
+  businessName          String?   @map("business_name")
+  experience            String?
+  serviceRadius         Int?      @default(15) @map("service_radius")
+  adminCommission       Int       @default(10) @map("admin_commission")
+  workerCommission      Int       @default(90) @map("worker_commission")
+
+  // Relations
+  jobs                  Job[]     @relation("WorkerJobs")
+  customerJobs          Job[]     @relation("CustomerJobs")
+  leads                 Lead[]
+  upgradeRequests       SubscriptionUpgradeRequest[]
+  notifications         Notification[]
+  plan                  SubscriptionPlan? @relation(fields: [planId], references: [id])
+  categories            WorkerCategory[]
+  messages              messages[]
+  conversations1        conversations[]   @relation("conversations_user1_idTousers")
+  conversations2        conversations[]   @relation("conversations_user2_idTousers")
 
   @@map("users")
-  subscriptionUpgradeRequests SubscriptionUpgradeRequest[]
-  notifications               Notification[]
-  messagesSent                Message[]        @relation("MessageSender")
 }
-
 model Category {
-  id        String           @id @default(uuid())
-  name      String           @unique
+  id        String   @id @default(uuid())
+  name      String
   icon      String?
-  createdAt DateTime         @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
   leads     Lead[]
   workers   WorkerCategory[]
 
   @@map("categories")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model WorkerCategory {
-  id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  categoryId String   @map("category_id")
-  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String @id @default(uuid())
+  userId     String @map("user_id")
+  categoryId String @map("category_id")
 
-  @@unique([userId, categoryId])
-  @@index([categoryId], map: "worker_categories_category_id_fkey")
+  // Relations
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
   @@map("worker_categories")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model Lead {
-  id          String     @id @default(uuid())
-  leadNo      String     @unique @default(cuid()) @map("lead_no") // Short friendly ID
-  customerId  String     @map("customer_id")
-  categoryId  String     @map("category_id")
-  location    String
-  description String?    @db.Text
-  servicePlan String     @default("Starter") @map("service_plan")
-  preferredDate String?  @map("preferred_date")
-  status      LeadStatus @default(OPEN)
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
-  job         Job?
-  category    Category   @relation(fields: [categoryId], references: [id])
-  customer    User       @relation("CustomerLeads", fields: [customerId], references: [id])
+  id            String     @id @default(uuid())
+  leadNo        String     @default(cuid()) @map("lead_no")
+  customerId    String?    @map("customer_id")
+  guestName     String?    @map("guest_name")
+  guestPhone    String?    @map("guest_phone")
+  guestEmail    String?    @map("guest_email")
+  sessionToken  String?    @unique @map("session_token")
+  isGuest       Boolean    @default(false) @map("is_guest")
+  categoryId    String     @map("category_id")
+  location      String
+  latitude      Float?     @map("latitude")
+  longitude     Float?     @map("longitude")
+  description   String?    @db.Text
+  servicePlan   String     @default("Starter") @map("service_plan")
+  status        LeadStatus @default(OPEN)
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  preferredDate String?    @map("preferred_date")
 
-  @@index([categoryId], map: "leads_category_id_fkey")
-  @@index([customerId], map: "leads_customer_id_fkey")
+  // Relations
+  customer    User?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id])
+  job         Job?
+
   @@map("leads")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model Job {
-  id            String         @id @default(uuid())
-  jobNo         String         @unique @default(cuid()) @map("job_no") // Short friendly ID
-  leadId        String?        @unique @map("lead_id")
-  customerId    String         @map("customer_id")
-  workerId      String         @map("worker_id")
-  categoryName  String         @map("category_name")
-  status        JobStatus      @default(SCHEDULED)
+  id            String    @id @default(uuid())
+  jobNo         String    @default(cuid()) @map("job_no")
+  leadId        String?   @unique @map("lead_id")
+  customerId    String?   @map("customer_id")
+  workerId      String    @map("worker_id")
+  categoryName  String    @map("category_name")
+  status        JobStatus @default(SCHEDULED)
   location      String
-  description   String?        @db.Text
-  preferredDate String?        @map("preferred_date")
-  scheduledDate DateTime       @map("scheduled_date")
-  scheduledTime String         @map("scheduled_time")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  contract      JobContract?
-  estimate      JobEstimate?
-  inspection    JobInspection?
-  invoice       JobInvoice?
-  photos        JobPhoto[]
-  customer      User           @relation("CustomerJobs", fields: [customerId], references: [id])
-  lead          Lead?          @relation(fields: [leadId], references: [id])
-  worker        User           @relation("WorkerJobs", fields: [workerId], references: [id])
-  review        Review?
-  chat          Chat?
+  latitude      Float?    @map("latitude")
+  longitude     Float?    @map("longitude")
+  guestName     String?   @map("guest_name")
+  guestPhone    String?   @map("guest_phone")
+  sessionToken  String?   @map("session_token")
+  isGuest       Boolean   @default(false) @map("is_guest")
+  description   String?   @db.Text
+  scheduledDate DateTime  @map("scheduled_date")
+  scheduledTime String    @map("scheduled_time")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  preferredDate String?   @map("preferred_date")
 
-  @@index([customerId], map: "jobs_customer_id_fkey")
-  @@index([workerId], map: "jobs_worker_id_fkey")
+  // Relations
+  lead       Lead?          @relation(fields: [leadId], references: [id])
+  customer   User?          @relation("CustomerJobs", fields: [customerId], references: [id], onDelete: Cascade)
+  worker     User           @relation("WorkerJobs", fields: [workerId], references: [id], onDelete: Cascade)
+  photos     JobPhoto[]
+  inspection JobInspection?
+  estimate   JobEstimate?
+  invoices   JobInvoice[]
+  contracts  JobContract[]
+  chats      chats?
+  reviews    reviews?
+
   @@map("jobs")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model JobPhoto {
   id        String   @id @default(uuid())
   jobId     String   @map("job_id")
   url       String
   type      String   @default("BEFORE")
   createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
   job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  @@index([jobId], map: "job_photos_job_id_fkey")
   @@map("job_photos")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model JobInspection {
-  id        String   @id @default(uuid())
-  jobId     String   @unique @map("job_id")
-  notes     String   @db.Text
-  signature String?
-  createdAt DateTime @default(now()) @map("created_at")
-  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  id            String   @id @default(uuid())
+  jobId         String   @unique @map("job_id")
+  notes         String   @db.Text
+  triageAnswers Json?    @map("triage_answers")
+  signature     String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("job_inspections")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model JobEstimate {
-  id         String   @id @default(uuid())
-  jobId      String   @unique @map("job_id")
-  amount     Float
-  details    String   @db.Text
-  isApproved Boolean  @default(false) @map("is_approved")
-  createdAt  DateTime @default(now()) @map("created_at")
-  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  id           String   @id @default(uuid())
+  jobId        String   @unique @map("job_id")
+  amount       Float
+  details      String   @db.Text
+  materials    Json?
+  laborHours   Float?   @map("labor_hours")
+  measurements Json?
+  isApproved   Boolean  @default(false) @map("is_approved")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  job          Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("job_estimates")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model JobContract {
   id                String   @id @default(uuid())
-  jobId             String   @unique @map("job_id")
+  jobId             String   @map("job_id")
   documentUrl       String   @map("document_url")
   signedByCustomer  Boolean  @default(false) @map("signed_by_customer")
   customerSignature String?  @map("customer_signature")
   createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
   job               Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("job_contracts")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model JobInvoice {
-  id        String   @id @default(uuid())
-  jobId     String   @unique @map("job_id")
-  amount    Float
-  status    String   @default("UNPAID")
-  paymentId String?  @map("payment_id")
-  createdAt DateTime @default(now()) @map("created_at")
-  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  id           String   @id @default(uuid())
+  jobId        String   @unique @map("job_id")
+  amount       Float
+  status       String   @default("UNPAID")
+  paymentId    String?  @map("payment_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  milestone    String   @default("SINGLE")
+  totalAmount  Float    @default(0) @map("total_amount")
+
+  // Relations
+  job          Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("job_invoices")
 }
 
-enum Role {
-  ADMIN
-  WORKER
-  CUSTOMER
-}
-
-enum JobStatus {
-  SCHEDULED
-  ACCEPTED
-  REJECTED
-  IN_PROGRESS
-  ESTIMATED
-  INVOICED
-  COMPLETED
-  CANCELLED
-}
-
-enum LeadStatus {
-  OPEN
-  ASSIGNED
-  REJECTED
-}
-
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model Location {
   id        String   @id @default(uuid())
   name      String
@@ -215,96 +238,165 @@ model Location {
   @@map("locations")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model SubscriptionPlan {
   id        String   @id @default(uuid())
-  name      String   @unique
+  name      String
   price     Float
-  leads     Int      @default(0) // 0 for unlimited
-  features  String?  @db.Text // JSON string of features
+  leads     Int      @default(0)
+  features  String?  @db.Text
   createdAt DateTime @default(now()) @map("created_at")
-  users     User[]
+
+  // Relations
+  users           User[]
+  upgradeRequests SubscriptionUpgradeRequest[]
 
   @@map("subscription_plans")
-  upgradeRequests SubscriptionUpgradeRequest[]
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model SubscriptionUpgradeRequest {
-  id              String           @id @default(uuid())
-  userId          String           @map("user_id")
-  planId          String           @map("plan_id")
-  status          String           @default("PENDING") // PENDING, APPROVED, REJECTED
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan            SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  planId    String   @map("plan_id")
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
 
   @@map("subscription_upgrade_requests")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model ProfessionalRequest {
-  id              String   @id @default(uuid())
-  name            String
-  businessName    String?  @map("business_name")
-  email           String   @unique
-  phone           String
-  category        String
-  address         String?  @db.Text
-  city            String?
-  state           String?
-  pincode         String?
-  preferredPlan   String   @map("preferred_plan")
-  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(uuid())
+  name          String
+  businessName  String?  @map("business_name")
+  email         String
+  phone         String
+  category      String
+  address       String?  @db.Text
+  city          String?
+  state         String?
+  pincode       String?
+  preferredPlan String   @map("preferred_plan")
+  status        String   @default("PENDING")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@map("professional_requests")
 }
 
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model Notification {
   id        String   @id @default(uuid())
-  userId    String?  @map("user_id") // null means system-wide or admin-targeted
+  userId    String?  @map("user_id")
   title     String
   message   String   @db.Text
-  type      String   @default("INFO") // INFO, SUCCESS, WARNING, ERROR, LEAD, ASSIGNMENT
+  type      String   @default("INFO")
   isRead    Boolean  @default(false) @map("is_read")
   createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
   user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
   @@map("notifications")
 }
 
-model Review {
-  id          String   @id @default(uuid())
-  jobId       String   @unique @map("job_id")
-  rating      Int      @default(5)
-  comment     String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-
-  @@map("reviews")
+model chats {
+  id           String     @id
+  job_id       String     @unique
+  last_message String?    @db.Text
+  updated_at   DateTime
+  jobs         Job        @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  messages     messages[]
 }
 
-model Chat {
-  id          String    @id @default(uuid())
-  jobId       String    @unique @map("job_id")
-  lastMessage String?   @db.Text @map("last_message")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-  job         Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  messages    Message[]
+model conversations {
+  id                                  String            @id
+  user1_id                            String
+  user2_id                            String
+  last_message                        String?           @db.Text
+  updated_at                          DateTime
+  users_conversations_user1_idTousers User              @relation("conversations_user1_idTousers", fields: [user1_id], references: [id])
+  users_conversations_user2_idTousers User              @relation("conversations_user2_idTousers", fields: [user2_id], references: [id])
+  direct_messages                     direct_messages[]
 
-  @@map("chats")
+  @@unique([user1_id, user2_id])
+  @@index([user2_id], map: "conversations_user2_id_fkey")
 }
 
-model Message {
-  id        String   @id @default(uuid())
-  chatId    String   @map("chat_id")
-  senderId  String   @map("sender_id")
-  text      String   @db.Text
-  isRead    Boolean  @default(false) @map("is_read")
-  createdAt DateTime @default(now()) @map("created_at")
-  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender    User     @relation("MessageSender", fields: [senderId], references: [id])
+model direct_messages {
+  id              String        @id
+  conversation_id String
+  sender_id       String
+  text            String        @db.Text
+  created_at      DateTime      @default(now())
+  conversations   conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
-  @@map("messages")
+  @@index([conversation_id], map: "direct_messages_conversation_id_fkey")
+}
+
+model Invitation {
+  id        String   @id
+  email     String   @unique
+  token     String   @unique
+  role      Role     @default(WORKER)
+  status    String   @default("PENDING")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([token])
+}
+
+model messages {
+  id         String   @id @default(uuid())
+  chat_id    String
+  sender_id  String?  @map("sender_id")
+  text       String   @db.Text
+  is_read    Boolean  @default(false)
+  isGuest    Boolean  @default(false) @map("is_guest")
+  created_at DateTime @default(now())
+  chats      chats    @relation(fields: [chat_id], references: [id], onDelete: Cascade)
+  users      User?    @relation(fields: [sender_id], references: [id])
+
+  @@index([chat_id], map: "messages_chat_id_fkey")
+  @@index([sender_id], map: "messages_sender_id_fkey")
+}
+
+model reviews {
+  id         String   @id
+  job_id     String   @unique
+  rating     Int      @default(5)
+  comment    String?  @db.Text
+  created_at DateTime @default(now())
+  jobs       Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  ADMIN
+  WORKER
+  CUSTOMER
+}
+
+enum JobStatus {
+  SCHEDULED
+  ACCEPTED
+  REJECTED
+  ON_THE_WAY
+  STARTED
+  IN_PROGRESS
+  ESTIMATED
+  INVOICED
+  COMPLETED
+  CANCELLED
+}
+
+enum LeadStatus {
+  OPEN
+  ASSIGNED
+  REJECTED
 }

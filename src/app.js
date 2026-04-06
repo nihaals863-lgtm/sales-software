@@ -1,3 +1,4 @@
+require('./config/env');
 const express = require('express');
 const cors = require('cors');
 
@@ -11,7 +12,9 @@ const locationRoutes = require('./routes/locationRoutes');
 const professionalRequestRoutes = require('./routes/professionalRequestRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const chatRoutes = require('./routes/chatRoutes');
+const messageRoutes = require('./routes/messageRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
+const guestRoutes = require('./routes/guestRoutes');
 
 const app = express();
 
@@ -33,7 +36,9 @@ app.use('/api/v1/locations', locationRoutes);
 app.use('/api/v1/professional-requests', professionalRequestRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/chats', chatRoutes);
+app.use('/api/v1/messages', messageRoutes);
 app.use('/api/v1/reviews', reviewRoutes);
+app.use('/api/v1/guest', guestRoutes);
 
 // Health Check Route
 app.get('/api/v1/health', (req, res) => {

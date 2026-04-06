@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { 
-    getProfessionals, 
-    updateLocation, 
-    toggleAvailability, 
-    createProfessional, 
-    updateProfessional, 
+const {
+    getProfessionals,
+    updateLocation,
+    getProfessionalsLocations,
+    toggleAvailability,
+    createProfessional,
+    updateProfessional,
     deleteProfessional,
     getProfile,
     updateProfile,
@@ -27,6 +28,10 @@ router.delete('/workers/:id', protect, authorize('ADMIN', 'WORKER'), deleteProfe
 
 // @route   PATCH /api/v1/users/location
 router.patch('/location', protect, updateLocation);
+// @route   POST /api/v1/users/update-location
+router.post('/update-location', protect, authorize('WORKER', 'ADMIN'), updateLocation);
+// @route   GET /api/v1/users/professionals-locations
+router.get('/professionals-locations', protect, authorize('ADMIN'), getProfessionalsLocations);
 
 // @route   PATCH /api/v1/users/status
 router.patch('/status', protect, toggleAvailability);

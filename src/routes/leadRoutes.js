@@ -1,31 +1,31 @@
 const express = require('express');
 const router = express.Router();
-const { 
-    createLead, 
-    getLeads, 
-    assignLead, 
-    deleteLead, 
-    updateLead, 
-    getCategories, 
-    getStats, 
-    createCategory, 
-    updateCategory, 
-    deleteCategory, 
-    getLocations, 
-    getSubscriptions, 
-    enrollInPlan, 
-    getActiveSubscriptions, 
-    createSubscriptionPlan, 
-    updateSubscriptionPlan, 
+const {
+    createLead,
+    getLeads,
+    assignLead,
+    deleteLead,
+    updateLead,
+    getCategories,
+    getStats,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+    getLocations,
+    getSubscriptions,
+    enrollInPlan,
+    getActiveSubscriptions,
+    createSubscriptionPlan,
+    updateSubscriptionPlan,
     deleteSubscriptionPlan,
     getUpgradeRequests,
     approveUpgradeRequest,
     rejectUpgradeRequest
 } = require('../controllers/leadController');
-const { protect, authorize } = require('../middlewares/authMiddleware');
+const { protect, optionalProtect, authorize } = require('../middlewares/authMiddleware');
 
 // @route   GET /api/v1/leads/stats
-router.get('/stats', protect, getStats);
+router.get('/stats', optionalProtect, getStats);
 
 // @route   GET /api/v1/leads/locations
 router.get('/locations', getLocations);
@@ -59,7 +59,8 @@ router.delete('/categories/:id', protect, authorize('ADMIN'), deleteCategory);
 router.post('/', createLead);
 
 // @route   GET /api/v1/leads
-router.get('/', protect, authorize('ADMIN', 'WORKER'), getLeads);
+// @route   GET /api/v1/leads
+router.get('/', optionalProtect, authorize('ADMIN', 'WORKER', 'GUEST'), getLeads);
 
 // @route   PATCH /api/v1/leads/:id/assign
 router.patch('/:id/assign', protect, authorize('WORKER', 'ADMIN'), assignLead);
