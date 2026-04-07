@@ -237,6 +237,10 @@ const updateProfessional = async (req, res) => {
 
         console.log(`[ADMIN] Updating Professional: ${id}`, req.body);
 
+        if (req.user.role === 'WORKER' && id !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'You can only update your own profile' });
+        }
+
         // 1. Validate Target exists
         const worker = await prisma.user.findUnique({ where: { id } });
         if (!worker) {
@@ -276,9 +280,11 @@ const updateProfessional = async (req, res) => {
             // Performance Rating update (if editing a professional)
             if (req.body.rating !== undefined) dataToUpdate.rating = parseFloat(req.body.rating || 0);
 
-            // New: Support for Commission adjustment
-            if (adminCommission !== undefined) dataToUpdate.adminCommission = parseInt(adminCommission);
-            if (workerCommission !== undefined) dataToUpdate.workerCommission = parseInt(workerCommission);
+            // Commission: admin only
+            if (req.user.role === 'ADMIN') {
+                if (adminCommission !== undefined) dataToUpdate.adminCommission = parseInt(adminCommission);
+                if (workerCommission !== undefined) dataToUpdate.workerCommission = parseInt(workerCommission);
+            }
 
             // ─── NEW: Support for Password Update ───
             if (password && password.length > 0) {
@@ -372,7 +378,7 @@ const updateProfile = async (req, res) => {
             name, email, phone, address, city, state, pincode,
             isAvailable, password, businessName, bio,
             availability, experience, serviceRadius, location,
-            trackingEnabled, isTrackingEnabled
+            trackingEnabled, isTrackingEnabled, payoutSettings
         } = req.body;
 
         const dataToUpdate = {
@@ -390,6 +396,29 @@ const updateProfile = async (req, res) => {
         if (password && password.trim() !== '') {
             const salt = await bcrypt.genSalt(10);
             dataToUpdate.password = await bcrypt.hash(password, salt);
+        }
+
+        if (payoutSettings !== undefined && payoutSettings !== null) {
+            const existing = await prisma.user.findUnique({
+                where: { id: req.user.id },
+                select: { payoutSettings: true }
+            });
+            const prev =
+                existing?.payoutSettings && typeof existing.payoutSettings === 'object' && !Array.isArray(existing.payoutSettings)
+                    ? existing.payoutSettings
+                    : {};
+            let incoming = payoutSettings;
+            if (typeof incoming === 'string') {
+                try {
+                    incoming = JSON.parse(incoming);
+                } catch {
+                    return res.status(400).json({ success: false, message: 'Invalid payoutSettings JSON' });
+                }
+            }
+            if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) {
+                return res.status(400).json({ success: false, message: 'payoutSettings must be an object' });
+            }
+            dataToUpdate.payoutSettings = { ...prev, ...incoming };
         }
 
         const updated = await prisma.user.update({
@@ -481,13 +510,50 @@ const getDashboardStats = async (req, res) => {
                 }
             });
         } else {
-            // Worker Stats
-            const [totalAssigned, accepted, completed, todayNew] = await Promise.all([
-                prisma.job.count({ where: { workerId: user.id } }),
-                prisma.job.count({ where: { workerId: user.id, status: 'ACCEPTED' } }),
-                prisma.job.count({ where: { workerId: user.id, status: 'COMPLETED' } }),
-                prisma.job.count({ where: { workerId: user.id, createdAt: { gte: todayStart } } })
+            // Worker stats + earnings from same paid invoices as admin/web (single source of truth)
+            const workerId = user.id;
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+            const [totalAssigned, accepted, completed, todayNew, paidTotal, paidMonth, recentInvoices] = await Promise.all([
+                prisma.job.count({ where: { workerId } }),
+                prisma.job.count({ where: { workerId, status: 'ACCEPTED' } }),
+                prisma.job.count({ where: { workerId, status: 'COMPLETED' } }),
+                prisma.job.count({ where: { workerId, createdAt: { gte: todayStart } } }),
+                prisma.jobInvoice.aggregate({
+                    _sum: { amount: true },
+                    where: { status: 'PAID', job: { workerId } },
+                }),
+                prisma.jobInvoice.aggregate({
+                    _sum: { amount: true },
+                    where: { status: 'PAID', job: { workerId }, createdAt: { gte: monthStart } },
+                }),
+                prisma.jobInvoice.findMany({
+                    where: { job: { workerId } },
+                    orderBy: { createdAt: 'desc' },
+                    take: 20,
+                    include: {
+                        job: {
+                            select: {
+                                categoryName: true,
+                                guestName: true,
+                                customer: { select: { name: true } },
+                            },
+                        },
+                    },
+                }),
             ]);
+
+            const totalEarnings = paidTotal._sum.amount || 0;
+            const thisMonthEarnings = paidMonth._sum.amount || 0;
+
+            const transactions = recentInvoices.map((i) => ({
+                id: i.id,
+                service: i.job?.categoryName || 'Service',
+                customer: i.job?.customer?.name || i.job?.guestName || 'Customer',
+                amount: i.amount,
+                status: i.status,
+                date: i.createdAt,
+            }));
 
             res.status(200).json({
                 success: true,
@@ -495,8 +561,14 @@ const getDashboardStats = async (req, res) => {
                     { name: 'New Jobs Today', value: todayNew, trend: '+10%', up: true },
                     { name: 'Total Assigned', value: totalAssigned, trend: '+4%', up: true },
                     { name: 'Accepted Jobs', value: accepted, trend: '+2%', up: true },
-                    { name: 'Completed Tasks', value: completed, trend: '+6%', up: true }
-                ]
+                    { name: 'Completed Tasks', value: completed, trend: '+6%', up: true },
+                ],
+                earnings: {
+                    total: totalEarnings,
+                    thisMonth: thisMonthEarnings,
+                    completedJobs: completed,
+                    transactions,
+                },
             });
         }
     } catch (err) {

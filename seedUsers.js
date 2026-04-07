@@ -6,9 +6,9 @@ const prisma = new PrismaClient();
 async function main() {
     console.log('🚀 Seeding users...');
 
-    // 1. ADMIN USER
+    // 1. ADMIN USER (must match AdminLogin.jsx defaults)
     const adminEmail = 'admin@gmail.com';
-    const adminPassword = 'pass-123';
+    const adminPassword = '1234';
     const hashedAdminPassword = await bcrypt.hash(adminPassword, 10);
 
     await prisma.user.upsert({
@@ -24,9 +24,9 @@ async function main() {
     });
     console.log(`✅ Admin created: ${adminEmail} / ${adminPassword}`);
 
-    // 2. PROFESSIONAL USER
+    // 2. PROFESSIONAL USER (must match ProfessionalLogin.jsx defaults — same as APK)
     const proEmail = 'pro@market.com';
-    const proPassword = 'pro123';
+    const proPassword = '1234';
     const hashedProPassword = await bcrypt.hash(proPassword, 10);
 
     await prisma.user.upsert({

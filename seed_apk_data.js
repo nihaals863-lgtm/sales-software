@@ -7,14 +7,16 @@ async function main() {
 
     // 1. Create a Professional (Worker)
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash('password123', salt);
+    // Same credentials as web software + seedUsers (pro@market.com / 1234)
+    const devPassword = '1234';
+    const hashedPassword = await bcrypt.hash(devPassword, salt);
 
     const worker = await prisma.user.upsert({
-        where: { email: 'pro@example.com' },
+        where: { email: 'pro@market.com' },
         update: { password: hashedPassword, role: 'WORKER' },
         create: {
             name: 'John Professional',
-            email: 'pro@example.com',
+            email: 'pro@market.com',
             phone: '1234567890',
             password: hashedPassword,
             role: 'WORKER',
@@ -53,7 +55,7 @@ async function main() {
     // 3. Create a Customer
     const customer = await prisma.user.upsert({
         where: { email: 'customer@example.com' },
-        update: {},
+        update: { password: hashedPassword },
         create: {
             name: 'Sarah Smith',
             email: 'customer@example.com',
@@ -128,9 +130,9 @@ async function main() {
     });
 
     console.log('✅ APK Data Seeded Successfully!');
-    console.log('Credentials:');
-    console.log('Email: pro@example.com');
-    console.log('Password: password123');
+    console.log('Credentials (same as web software):');
+    console.log('  Pro:  pro@market.com / 1234');
+    console.log('  Admin: admin@gmail.com / 1234');
 }
 
 main().catch(err => {

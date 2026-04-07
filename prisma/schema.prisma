@@ -33,6 +33,8 @@ model User {
   availability          String?
   bio                   String?   @db.Text
   businessName          String?   @map("business_name")
+  /// Masked payout metadata only (last4, names) — wire full PSP later via payment APIs.
+  payoutSettings        Json?     @map("payout_settings")
   experience            String?
   serviceRadius         Int?      @default(15) @map("service_radius")
   adminCommission       Int       @default(10) @map("admin_commission")
@@ -49,12 +51,13 @@ model User {
   messages              messages[]
   conversations1        conversations[]   @relation("conversations_user1_idTousers")
   conversations2        conversations[]   @relation("conversations_user2_idTousers")
+  preferredForGuestLeads Lead[]           @relation("LeadPreferredWorker")
 
   @@map("users")
 }
 model Category {
   id        String   @id @default(uuid())
-  name      String   @unique
+  name      String
   icon      String?
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -97,12 +100,14 @@ model Lead {
   status        LeadStatus @default(OPEN)
   createdAt     DateTime   @default(now()) @map("created_at")
   updatedAt     DateTime   @updatedAt @map("updated_at")
-  preferredDate String?    @map("preferred_date")
+  preferredDate     String? @map("preferred_date")
+  preferredWorkerId String? @map("preferred_worker_id")
 
   // Relations
-  customer    User?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  category    Category @relation(fields: [categoryId], references: [id])
-  job         Job?
+  customer         User?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  category         Category @relation(fields: [categoryId], references: [id])
+  preferredWorker  User?    @relation("LeadPreferredWorker", fields: [preferredWorkerId], references: [id], onDelete: SetNull)
+  job              Job?
 
   @@map("leads")
 }
@@ -241,7 +246,7 @@ model Location {
 /// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
 model SubscriptionPlan {
   id        String   @id @default(uuid())
-  name      String   @unique
+  name      String
   price     Float
   leads     Int      @default(0)
   features  String?  @db.Text

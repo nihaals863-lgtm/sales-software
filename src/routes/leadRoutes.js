@@ -4,6 +4,7 @@ const {
     createLead,
     getLeads,
     assignLead,
+    assignLeadNearest,
     deleteLead,
     updateLead,
     getCategories,
@@ -20,7 +21,9 @@ const {
     deleteSubscriptionPlan,
     getUpgradeRequests,
     approveUpgradeRequest,
-    rejectUpgradeRequest
+    rejectUpgradeRequest,
+    getLeadById,
+    patchLeadLocation
 } = require('../controllers/leadController');
 const { protect, optionalProtect, authorize } = require('../middlewares/authMiddleware');
 
@@ -61,6 +64,15 @@ router.post('/', createLead);
 // @route   GET /api/v1/leads
 // @route   GET /api/v1/leads
 router.get('/', optionalProtect, authorize('ADMIN', 'WORKER', 'GUEST'), getLeads);
+
+// @route   PATCH /api/v1/leads/:id/location (before /:id GET)
+router.patch('/:id/location', protect, authorize('ADMIN', 'WORKER'), patchLeadLocation);
+
+// @route   GET /api/v1/leads/:id
+router.get('/:id', protect, authorize('ADMIN', 'WORKER'), getLeadById);
+
+// @route   PATCH /api/v1/leads/:id/assign-nearest (admin — project from nearest / guest preference)
+router.patch('/:id/assign-nearest', protect, authorize('ADMIN'), assignLeadNearest);
 
 // @route   PATCH /api/v1/leads/:id/assign
 router.patch('/:id/assign', protect, authorize('WORKER', 'ADMIN'), assignLead);

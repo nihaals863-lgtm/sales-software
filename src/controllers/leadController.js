@@ -1,4 +1,5 @@
 const prisma = require('../config/db');
+const { haversineKm } = require('../utils/geo');
 const { v4: uuidv4 } = require('uuid');
 
 const generateShortId = (prefix) => {
@@ -138,6 +139,15 @@ const getLeads = async (req, res) => {
             orderBy: { createdAt: 'desc' }
         });
 
+        const preferredIds = [...new Set(leads.map((l) => l.preferredWorkerId).filter(Boolean))];
+        const preferredWorkers = preferredIds.length
+            ? await prisma.user.findMany({
+                  where: { id: { in: preferredIds } },
+                  select: { id: true, name: true, phone: true, rating: true },
+              })
+            : [];
+        const preferredWorkerMap = new Map(preferredWorkers.map((w) => [w.id, w]));
+
         const formattedLeads = leads.map(l => ({
             ...l,
             customerName: l.customer?.name || l.guestName || 'Valued Customer',
@@ -145,6 +155,8 @@ const getLeads = async (req, res) => {
             customerPhone: l.customer?.phone || l.guestPhone || '—',
             guestEmail: l.guestEmail,
             guestPhone: l.guestPhone,
+            preferredWorkerId: l.preferredWorkerId,
+            preferredWorkerName: preferredWorkerMap.get(l.preferredWorkerId)?.name || null,
             categoryName: l.category?.name || 'Uncategorized',
             displayId: l.leadNo
         }));
@@ -161,8 +173,9 @@ const getLeads = async (req, res) => {
 const assignLead = async (req, res) => {
     try {
         const leadId = req.params.id;
-        const { workerId: bodyWorkerId } = req.body;
-        const workerId = bodyWorkerId || req.user.id;
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const { workerId: bodyWorkerId } = body;
+        const workerId = bodyWorkerId || req.user.id; 
 
         if (!workerId) {
             return res.status(400).json({ success: false, message: 'workerId is required' });
@@ -275,6 +288,78 @@ const assignLead = async (req, res) => {
     }
 };
 
+// @route   PATCH /api/v1/leads/:id/assign-nearest
+// @desc    Admin: assign OPEN lead to nearest available worker (honors guest preferredWorkerId if valid)
+const assignLeadNearest = async (req, res) => {
+    try {
+        const leadId = req.params.id;
+
+        const lead = await prisma.lead.findUnique({
+            where: { id: leadId },
+            include: { category: true }
+        });
+
+        if (!lead) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+
+        if (lead.status !== 'OPEN') {
+            return res.status(400).json({ success: false, message: `Lead is already ${lead.status.toLowerCase()}` });
+        }
+
+        if (lead.preferredWorkerId) {
+            const pref = await prisma.user.findFirst({
+                where: {
+                    id: lead.preferredWorkerId,
+                    role: 'WORKER',
+                    isAvailable: true,
+                    lat: { not: null },
+                    lng: { not: null }
+                }
+            });
+            if (pref) {
+                req.body = { ...req.body, workerId: pref.id };
+                return await assignLead(req, res);
+            }
+        }
+
+        if (lead.latitude == null || lead.longitude == null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Lead has no coordinates. Set latitude/longitude on the lead or assign manually.'
+            });
+        }
+
+        const workers = await prisma.user.findMany({
+            where: { role: 'WORKER', isAvailable: true, lat: { not: null }, lng: { not: null } }
+        });
+
+        let best = null;
+        let bestD = Infinity;
+        for (const w of workers) {
+            const d = haversineKm(lead.latitude, lead.longitude, w.lat, w.lng);
+            if (d < bestD) {
+                bestD = d;
+                best = w;
+            }
+        }
+
+        if (!best) {
+            return res.status(400).json({
+                success: false,
+                message: 'No workers with location on file. Update worker GPS or assign manually.'
+            });
+        }
+
+        const baseNearest = req.body && typeof req.body === 'object' ? req.body : {};
+        req.body = { ...baseNearest, workerId: best.id };
+        return await assignLead(req, res);
+    } catch (error) {
+        console.error('Assign nearest error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server Error' });
+    }
+};
+
 const updateLead = async (req, res) => {
     try {
         const { id } = req.params;
@@ -351,6 +436,69 @@ const updateLead = async (req, res) => {
     } catch (err) {
         console.error("❌ [API] updateLead Error:", err);
         res.status(500).json({ success: false, message: 'Lead update failed: ' + err.message, error: err.stack });
+    }
+};
+
+/** PATCH body: { location?, latitude?, longitude? } — workers/admins set site pin for OPEN leads */
+const patchLeadLocation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { location, latitude, longitude } = req.body || {};
+
+        const lead = await prisma.lead.findUnique({ where: { id } });
+        if (!lead) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+
+        const data = {};
+        if (location !== undefined && location !== null) data.location = String(location);
+        if (latitude !== undefined) {
+            const v = latitude === null || latitude === '' ? null : parseFloat(latitude);
+            data.latitude = Number.isFinite(v) ? v : null;
+        }
+        if (longitude !== undefined) {
+            const v = longitude === null || longitude === '' ? null : parseFloat(longitude);
+            data.longitude = Number.isFinite(v) ? v : null;
+        }
+        if (Object.keys(data).length === 0) {
+            return res.status(400).json({ success: false, message: 'No location fields to update' });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const u = await tx.lead.update({
+                where: { id },
+                data,
+                include: {
+                    customer: { select: { name: true, phone: true, email: true } },
+                    category: { select: { name: true } },
+                    preferredWorker: { select: { id: true, name: true, phone: true, rating: true } },
+                    job: { select: { id: true, workerId: true, status: true, jobNo: true } },
+                },
+            });
+            if (u.job?.id) {
+                const jobPatch = {};
+                if (data.location !== undefined) jobPatch.location = data.location;
+                if (data.latitude !== undefined) jobPatch.latitude = data.latitude;
+                if (data.longitude !== undefined) jobPatch.longitude = data.longitude;
+                if (Object.keys(jobPatch).length > 0) {
+                    await tx.job.update({ where: { id: u.job.id }, data: jobPatch });
+                }
+            }
+            return u;
+        });
+
+        const out = {
+            ...updated,
+            customerName: updated.customer?.name || updated.guestName || 'Valued Customer',
+            customerEmail: updated.customer?.email || updated.guestEmail || '—',
+            customerPhone: updated.customer?.phone || updated.guestPhone || '—',
+            categoryName: updated.category?.name || 'Uncategorized',
+            displayId: updated.leadNo,
+        };
+        res.status(200).json({ success: true, data: out });
+    } catch (err) {
+        console.error('patchLeadLocation error:', err);
+        res.status(500).json({ success: false, message: 'Lead location update failed' });
     }
 };
 
@@ -707,10 +855,51 @@ const deleteSubscriptionPlan = async (req, res) => {
     }
 };
 
+// @route   GET /api/v1/leads/:id
+const getLeadById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const lead = await prisma.lead.findUnique({
+            where: { id },
+            include: {
+                customer: { select: { name: true, phone: true, email: true } },
+                category: { select: { name: true } },
+                job: { select: { id: true, workerId: true, status: true, jobNo: true } },
+            },
+        });
+        if (!lead) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+        const data = {
+            ...lead,
+            customerName: lead.customer?.name || lead.guestName || 'Valued Customer',
+            customerEmail: lead.customer?.email || lead.guestEmail || '—',
+            customerPhone: lead.customer?.phone || lead.guestPhone || '—',
+            preferredWorkerName: null,
+            categoryName: lead.category?.name || 'Uncategorized',
+            displayId: lead.leadNo,
+        };
+        if (lead.preferredWorkerId) {
+            const pref = await prisma.user.findUnique({
+                where: { id: lead.preferredWorkerId },
+                select: { name: true },
+            });
+            data.preferredWorkerName = pref?.name || null;
+        }
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        console.error('getLeadById error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error' });
+    }
+};
+
 module.exports = {
     createLead,
     getLeads,
+    getLeadById,
+    patchLeadLocation,
     assignLead,
+    assignLeadNearest,
     updateLead,
     deleteLead,
     getCategories,

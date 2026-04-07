@@ -1,4 +1,5 @@
 const prisma = require('../config/db');
+const { filterJobPhotosForRole } = require('../utils/jobPhotoPolicy');
 
 const generateShortId = (prefix) => {
     return `${prefix}-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -28,8 +29,10 @@ const getJobs = async (req, res) => {
                     worker: { select: { name: true } },
                     photos: true,
                     estimate: true,
+                    invoices: { orderBy: { createdAt: 'desc' }, take: 1 },
                     inspection: true,
-                    chats: { select: { id: true } }
+                    chats: { select: { id: true } },
+                    lead: { include: { category: true, customer: { select: { name: true, phone: true } } } },
                 },
                 orderBy: { createdAt: 'desc' }
             });
@@ -42,23 +45,38 @@ const getJobs = async (req, res) => {
                     worker: { select: { name: true } },
                     photos: true,
                     estimate: true,
+                    invoices: { orderBy: { createdAt: 'desc' }, take: 1 },
                     inspection: true,
-                    chats: { select: { id: true } }
+                    chats: { select: { id: true } },
+                    lead: { include: { category: true, customer: { select: { name: true, phone: true } } } },
                 },
                 orderBy: { createdAt: 'desc' }
             });
         }
 
-        const formattedJobs = jobs.map(j => ({
-            ...j,
-            customerName: j.customer?.name || j.guestName || 'Valued Customer',
-            customerPhone: j.customer?.phone || j.guestPhone || '—',
-            customerEmail: j.customer?.email || j.guestEmail || '—',
-            customerAddress: j.customer?.address || j.location || '—',
-            workerName: j.worker?.name || 'Unassigned',
-            chatId: j.chats?.id || null,
-            displayId: j.jobNo || (j.id ? `JB-${String(j.id).slice(-4).toUpperCase()}` : 'JB-0000')
-        }));
+        const role = user?.role || 'GUEST';
+        const uid = user?.id;
+
+        const formattedJobs = jobs.map((j) => {
+            const photos = filterJobPhotosForRole(j.photos, {
+                role,
+                userId: uid,
+                jobWorkerId: j.workerId,
+            });
+            const invoice = j.invoices?.[0] || null;
+            return {
+                ...j,
+                photos,
+                invoice,
+                customerName: j.customer?.name || j.guestName || 'Valued Customer',
+                customerPhone: j.customer?.phone || j.guestPhone || null,
+                customerEmail: j.customer?.email || j.guestEmail || '—',
+                customerAddress: j.customer?.address || j.location || '—',
+                workerName: j.worker?.name || 'Unassigned',
+                chatId: j.chats?.id || null,
+                displayId: j.jobNo || (j.id ? `JB-${String(j.id).slice(-4).toUpperCase()}` : 'JB-0000'),
+            };
+        });
 
         res.status(200).json({ success: true, count: jobs.length, data: formattedJobs });
     } catch (error) {
@@ -70,7 +88,20 @@ const getJobs = async (req, res) => {
 const updateJob = async (req, res) => {
     try {
         const jobId = req.params.id;
-        const { customerName, phone, category, professionalId, location, description, status, date, time } = req.body;
+        const user = req.user;
+        const {
+            customerName,
+            phone,
+            category,
+            professionalId,
+            location,
+            description,
+            status,
+            date,
+            time,
+            latitude,
+            longitude,
+        } = req.body;
 
         // 1. Perform update in a transaction
         const result = await prisma.$transaction(async (tx) => {
@@ -85,6 +116,15 @@ const updateJob = async (req, res) => {
             });
 
             if (!existingJob) throw new Error("JOB_NOT_FOUND");
+
+            if (user.role === 'WORKER') {
+                if (existingJob.workerId !== user.id) {
+                    throw new Error("NOT_AUTHORIZED");
+                }
+                if (professionalId && professionalId !== existingJob.workerId) {
+                    throw new Error("NOT_AUTHORIZED");
+                }
+            }
 
             // Use the real UUID for the actual update
             const realJobId = existingJob.id;
@@ -101,35 +141,76 @@ const updateJob = async (req, res) => {
 
             // C. Build updates
             const updateData = {};
-            if (professionalId) updateData.workerId = professionalId;
+            if (user.role !== 'WORKER' && professionalId) updateData.workerId = professionalId;
             if (category) updateData.categoryName = category;
-            if (location) updateData.location = location;
+            if (location !== undefined && location !== null) updateData.location = String(location);
             if (description !== undefined) updateData.description = description;
             if (status) updateData.status = status;
             if (date) updateData.scheduledDate = new Date(date);
             if (time) updateData.scheduledTime = time;
+            if (latitude !== undefined) {
+                const v = latitude === null || latitude === '' ? null : parseFloat(latitude);
+                updateData.latitude = Number.isFinite(v) ? v : null;
+            }
+            if (longitude !== undefined) {
+                const v = longitude === null || longitude === '' ? null : parseFloat(longitude);
+                updateData.longitude = Number.isFinite(v) ? v : null;
+            }
 
-            return await tx.job.update({
+            const updated = await tx.job.update({
                 where: { id: realJobId },
                 data: updateData
             });
+
+            const leadSync = {};
+            if (location !== undefined && location !== null) leadSync.location = String(location);
+            if (latitude !== undefined) {
+                const v = latitude === null || latitude === '' ? null : parseFloat(latitude);
+                leadSync.latitude = Number.isFinite(v) ? v : null;
+            }
+            if (longitude !== undefined) {
+                const v = longitude === null || longitude === '' ? null : parseFloat(longitude);
+                leadSync.longitude = Number.isFinite(v) ? v : null;
+            }
+            if (existingJob.leadId && Object.keys(leadSync).length > 0) {
+                await tx.lead.update({
+                    where: { id: existingJob.leadId },
+                    data: leadSync,
+                });
+            }
+
+            return updated;
         });
 
         res.status(200).json({ success: true, data: result });
     } catch (err) {
         console.error("Job Update Error:", err);
-        res.status(err.message === "JOB_NOT_FOUND" ? 404 : 500).json({
-            success: false,
-            message: err.message === 'JOB_NOT_FOUND' ? 'Job not found' : 'Job update failed'
-        });
+        const code = err.message === "JOB_NOT_FOUND" ? 404 : err.message === "NOT_AUTHORIZED" ? 403 : 500;
+        const msg =
+            err.message === "JOB_NOT_FOUND"
+                ? "Job not found"
+                : err.message === "NOT_AUTHORIZED"
+                  ? "Not authorized to update this job"
+                  : "Job update failed";
+        res.status(code).json({ success: false, message: msg });
     }
 };
 
 const submitCompliance = async (req, res) => {
     try {
-        const jobId = req.params.id;
+        const param = req.params.id;
+        const user = req.user;
+        const existingJob = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] },
+        });
+        if (!existingJob) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+        if (user.role === 'WORKER' && existingJob.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
         const job = await prisma.job.update({
-            where: { id: jobId },
+            where: { id: existingJob.id },
             data: { status: 'COMPLETED' }
         });
         res.status(200).json({ success: true, data: job });
@@ -140,11 +221,23 @@ const submitCompliance = async (req, res) => {
 
 const submitInspection = async (req, res) => {
     try {
-        const jobId = req.params.id;
+        const param = req.params.id;
         const { notes, triageAnswers, signature } = req.body;
+        const user = req.user;
+
+        const existingJob = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] },
+        });
+        if (!existingJob) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+        if (user.role === 'WORKER' && existingJob.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+        const jobId = existingJob.id;
 
         const inspection = await prisma.jobInspection.upsert({
-            where: { jobId: jobId },
+            where: { jobId },
             update: { notes: notes || '', triageAnswers, signature },
             create: { jobId, notes: notes || '', triageAnswers, signature }
         });
@@ -158,8 +251,20 @@ const submitInspection = async (req, res) => {
 
 const createEstimate = async (req, res) => {
     try {
-        const jobId = req.params.id;
+        const param = req.params.id;
+        const user = req.user;
         const { amount, details, materials, laborHours, measurements } = req.body;
+
+        const existingJob = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] },
+        });
+        if (!existingJob) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+        if (user.role === 'WORKER' && existingJob.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+        const jobId = existingJob.id;
 
         const estimate = await prisma.jobEstimate.upsert({
             where: { jobId: jobId },
@@ -194,16 +299,20 @@ const createEstimate = async (req, res) => {
 
 const createInvoice = async (req, res) => {
     try {
-        const jobId = req.params.id;
+        const param = req.params.id;
         const { amount, milestone, totalAmount } = req.body;
 
         // --- STRICT WORKFLOW CHECK ---
-        const job = await prisma.job.findUnique({
-            where: { id: jobId },
+        const job = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] },
             include: { estimate: true }
         });
 
         if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+        if (req.user.role === 'WORKER' && job.workerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+        const jobId = job.id;
         if (req.user.role !== 'ADMIN') {
             if (!job.estimate) return res.status(400).json({ success: false, message: 'Estimate is required before invoice' });
         }
@@ -219,7 +328,7 @@ const createInvoice = async (req, res) => {
 
         const invoice = await prisma.jobInvoice.create({
             data: {
-                jobId: jobId,
+                jobId,
                 totalAmount: parseFloat(totalAmount) || 0,
                 amount: invoiceAmount,
                 milestone: milestone || 'SINGLE',
@@ -312,27 +421,38 @@ const getJobsForMap = async (req, res) => {
                 latitude: true,
                 longitude: true,
                 scheduledDate: true,
+                workerId: true,
                 customer: { select: { name: true } },
+                guestName: true,
                 worker: { select: { name: true } },
-                chats: { select: { id: true } }
+                chats: { select: { id: true } },
+                photos: { orderBy: { createdAt: 'desc' }, take: 12 },
             },
             orderBy: { createdAt: 'desc' }
         });
 
-        // Only return jobs that have coordinates OR have a location string
-        const mapJobs = jobs.map(j => ({
-            id: j.id,
-            jobNo: j.jobNo,
-            category: j.categoryName,
-            status: j.status,
-            location: j.location,
-            latitude: j.latitude,
-            longitude: j.longitude,
-            scheduledDate: j.scheduledDate,
-            customerName: j.customer?.name || 'Customer',
-            workerName: j.worker?.name || 'Unassigned',
-            chatId: j.chats?.id || null
-        }));
+        // Map is public-style: only guest-visible photos (cover thumb)
+        const mapJobs = jobs.map((j) => {
+            const publicPhotos = filterJobPhotosForRole(j.photos, {
+                role: 'GUEST',
+                userId: null,
+                jobWorkerId: j.workerId,
+            });
+            return {
+                id: j.id,
+                jobNo: j.jobNo,
+                category: j.categoryName,
+                status: j.status,
+                location: j.location,
+                latitude: j.latitude,
+                longitude: j.longitude,
+                scheduledDate: j.scheduledDate,
+                customerName: j.customer?.name || j.guestName || 'Customer',
+                workerName: j.worker?.name || 'Unassigned',
+                chatId: j.chats?.id || null,
+                coverPhotoUrl: publicPhotos[0]?.url || null,
+            };
+        });
 
         res.status(200).json({ success: true, count: mapJobs.length, data: mapJobs });
     } catch (error) {
@@ -341,6 +461,56 @@ const getJobsForMap = async (req, res) => {
     }
 };
 
+// @route   GET /api/v1/jobs/:id
+// @desc    Single job with photos filtered by role (admin / worker / guest)
+const getJobById = async (req, res) => {
+    try {
+        const param = req.params.id;
+        const user = req.user || { role: 'GUEST' };
+
+        const job = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] },
+            include: {
+                customer: { select: { name: true, phone: true, email: true } },
+                worker: { select: { name: true, phone: true } },
+                photos: { orderBy: { createdAt: 'desc' } },
+                estimate: true,
+                inspection: true,
+                chats: { select: { id: true } },
+                lead: { select: { id: true, status: true, leadNo: true } },
+            },
+        });
+
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+
+        if (user.role === 'WORKER' && job.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'You can only view jobs assigned to you' });
+        }
+
+        const photos = filterJobPhotosForRole(job.photos, {
+            role: user.role,
+            userId: user.id,
+            jobWorkerId: job.workerId,
+        });
+
+        const data = {
+            ...job,
+            photos,
+            customerName: job.customer?.name || job.guestName || 'Valued Customer',
+            customerPhone: job.customer?.phone || job.guestPhone || null,
+            workerName: job.worker?.name || 'Unassigned',
+            chatId: job.chats?.id || null,
+            displayId: job.jobNo || (job.id ? `JB-${String(job.id).slice(-4).toUpperCase()}` : 'JB-0000'),
+        };
+
+        res.status(200).json({ success: true, data });
+    } catch (err) {
+        console.error('getJobById error:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch job' });
+    }
+};
 
 const deleteJob = async (req, res) => {
     try {
@@ -365,13 +535,23 @@ const deleteJob = async (req, res) => {
 
 const getEstimates = async (req, res) => {
     try {
+        const user = req.user;
+        const workerFilter =
+            user.role === 'WORKER' ? { job: { workerId: user.id } } : {};
         const estimates = await prisma.jobEstimate.findMany({
-            include: { job: { include: { customer: { select: { name: true } } } } }
+            where: workerFilter,
+            include: {
+                job: {
+                    include: {
+                        customer: { select: { name: true } },
+                    },
+                },
+            },
         });
-        const formatted = estimates.map(e => ({
+        const formatted = estimates.map((e) => ({
             ...e,
-            customerName: e.job.customer?.name || 'Valued Customer',
-            categoryName: e.job.categoryName
+            customerName: e.job.customer?.name || e.job.guestName || 'Valued Customer',
+            categoryName: e.job.categoryName,
         }));
         res.status(200).json({ success: true, data: formatted });
     } catch (error) {
@@ -382,18 +562,29 @@ const getEstimates = async (req, res) => {
 const getJobHistory = async (req, res) => {
     try {
         const jobId = req.params.id;
-        const job = await prisma.job.findUnique({
-            where: { id: jobId },
+        const user = req.user || { role: 'GUEST' };
+
+        const job = await prisma.job.findFirst({
+            where: { OR: [{ id: jobId }, { jobNo: jobId }] },
             include: {
                 worker: true,
                 estimate: true,
-                invoice: true,
                 photos: true,
                 lead: true
             }
         });
 
         if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        if (user.role === 'WORKER' && job.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'You can only view history for your assigned jobs' });
+        }
+
+        const visiblePhotos = filterJobPhotosForRole(job.photos, {
+            role: user.role,
+            userId: user.id,
+            jobWorkerId: job.workerId
+        });
 
         const history = [];
 
@@ -422,7 +613,12 @@ const getJobHistory = async (req, res) => {
         }
 
         // 3. Status Updates (Simplified)
-        if (job.status === 'ACCEPTED' || job.status === 'IN_PROGRESS' || job.status === 'COMPLETED') {
+        if (
+            job.status === 'ACCEPTED' ||
+            job.status === 'IN_PROGRESS' ||
+            job.status === 'COMPLETED' ||
+            job.status === 'ESTIMATED'
+        ) {
             history.push({
                 id: 'h3',
                 title: `Status: ${job.status}`,
@@ -447,13 +643,13 @@ const getJobHistory = async (req, res) => {
             });
         }
 
-        // 5. Photos
-        if (job.photos.length > 0) {
+        // 5. Photos (count only what this role can see)
+        if (visiblePhotos.length > 0) {
             history.push({
                 id: 'h5',
                 title: 'Photos Uploaded',
-                sub: `${job.photos.length} site documentation photo(s) added.`,
-                time: job.photos[job.photos.length - 1].createdAt,
+                sub: `${visiblePhotos.length} site documentation photo(s) added.`,
+                time: visiblePhotos[0].createdAt,
                 icon: 'camera',
                 color: '#38A169',
                 bg: '#F0FFF4'
@@ -471,15 +667,40 @@ const getJobHistory = async (req, res) => {
 
 const addJobPhoto = async (req, res) => {
     try {
-        const jobId = req.params.id;
-        const { url } = req.body;
+        const param = req.params.id;
+        const { url, type } = req.body;
+        const user = req.user;
 
         if (!url) return res.status(400).json({ success: false, message: 'Photo URL is required' });
+        if (!user || (user.role !== 'ADMIN' && user.role !== 'WORKER')) {
+            return res.status(403).json({ success: false, message: 'Only staff can upload job photos' });
+        }
+
+        const existingJob = await prisma.job.findFirst({
+            where: { OR: [{ id: param }, { jobNo: param }] }
+        });
+
+        if (!existingJob) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+
+        if (user.role === 'WORKER' && existingJob.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'You can only add photos to jobs assigned to you' });
+        }
+
+        let photoType = user.role === 'WORKER' ? 'PROGRESS' : 'SITE';
+        if (type && typeof type === 'string' && type.length <= 32) {
+            photoType = type.toUpperCase();
+        }
+        if (user.role === 'WORKER' && ['ADMIN_ONLY', 'INTERNAL'].includes(photoType)) {
+            photoType = 'PROGRESS';
+        }
 
         const photo = await prisma.jobPhoto.create({
             data: {
-                jobId: jobId,
-                url: url,
+                jobId: existingJob.id,
+                url,
+                type: photoType,
             }
         });
 
@@ -492,13 +713,23 @@ const addJobPhoto = async (req, res) => {
 
 const getInvoices = async (req, res) => {
     try {
+        const user = req.user;
+        const workerFilter =
+            user.role === 'WORKER' ? { job: { workerId: user.id } } : {};
         const invoices = await prisma.jobInvoice.findMany({
-            include: { job: { include: { customer: { select: { name: true } } } } }
+            where: workerFilter,
+            include: {
+                job: {
+                    include: {
+                        customer: { select: { name: true } },
+                    },
+                },
+            },
         });
-        const formatted = invoices.map(i => ({
+        const formatted = invoices.map((i) => ({
             ...i,
-            customerName: i.job.customer?.name || 'Valued Customer',
-            categoryName: i.job.categoryName
+            customerName: i.job.customer?.name || i.job.guestName || 'Valued Customer',
+            categoryName: i.job.categoryName,
         }));
         res.status(200).json({ success: true, data: formatted });
     } catch (error) {
@@ -508,6 +739,7 @@ const getInvoices = async (req, res) => {
 
 module.exports = {
     getJobs,
+    getJobById,
     updateJob,
     submitCompliance,
     submitInspection,

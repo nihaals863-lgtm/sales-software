@@ -162,6 +162,7 @@ const initSocket = (server) => {
             if (!socket.user || socket.user.role !== 'WORKER') return;
             const lat = Number(data?.lat);
             const lng = Number(data?.lng);
+            const jobId = data?.jobId;
             if (Number.isNaN(lat) || Number.isNaN(lng)) return;
 
             try {
@@ -179,13 +180,29 @@ const initSocket = (server) => {
                     lat: updated.lat,
                     lng: updated.lng,
                     updatedAt: updated.updatedAt,
-                    trackingEnabled: !!updated.isTrackingEnabled
+                    trackingEnabled: !!updated.isTrackingEnabled,
+                    jobId: jobId || null
                 };
 
                 io.to('admin_live_map').emit('update_on_map', payload);
+                if (jobId) {
+                    io.to(jobId).emit('professional_location_update', payload);
+                }
             } catch (err) {
                 console.error('❌ Socket location update error:', err.message);
             }
+        });
+
+        socket.on("professional_arrived", async (data) => {
+            if (!socket.user || socket.user.role !== 'WORKER') return;
+            const jobId = data?.jobId;
+            if (!jobId) return;
+            const payload = {
+                jobId,
+                professionalId: socket.user.id,
+                arrivedAt: new Date().toISOString()
+            };
+            io.to(jobId).emit('professional_arrived', payload);
         });
 
         socket.on("disconnect", () => {

@@ -67,11 +67,11 @@ const getMessages = async (req, res) => {
 
         if (!chat) return res.status(404).json({ success: false, message: 'Chat not found' });
 
-        // Authorization logic
-        const isWorker = req.user && chat.jobs.workerId === req.user.id;
+        const isAdmin = req.user?.role === 'ADMIN';
+        const isWorker = req.user?.id && chat.jobs.workerId === req.user.id;
         const isGuest = sessionToken && chat.jobs.sessionToken === sessionToken;
 
-        if (!isWorker && !isGuest) {
+        if (!isAdmin && !isWorker && !isGuest) {
             return res.status(403).json({ success: false, message: 'Not authorized for this chat' });
         }
 
@@ -102,20 +102,21 @@ const sendMessage = async (req, res) => {
 
         if (!chat) return res.status(404).json({ success: false, message: 'Chat not found' });
 
-        // Authorization logic
+        const isAdmin = req.user?.role === 'ADMIN';
         const isWorker = req.user?.id && chat.jobs.workerId === req.user.id;
         const isGuestAuth = sessionToken && chat.jobs.sessionToken === sessionToken;
 
-        if (!isWorker && !isGuestAuth) {
+        if (!isAdmin && !isWorker && !isGuestAuth) {
             return res.status(403).json({ success: false, message: 'Not authorized for this chat' });
         }
 
+        const staffSender = isWorker || isAdmin ? req.user.id : null;
         const message = await prisma.messages.create({
             data: {
                 id: uuidv4(),
                 chat_id: chatId,
-                sender_id: isWorker ? req.user.id : null,
-                isGuest: isGuestAuth,
+                sender_id: staffSender,
+                isGuest: isGuestAuth && !staffSender,
                 text,
                 created_at: new Date()
             }
@@ -127,7 +128,7 @@ const sendMessage = async (req, res) => {
             const io = getIO();
             const payload = {
                 ...message,
-                senderName: isWorker ? req.user.name : "Customer"
+                senderName: staffSender ? req.user.name : "Customer"
             };
             io.to(chat.jobs.id).emit("new_message", payload);
             io.to(chat.jobs.id).emit("receive_message", payload);
