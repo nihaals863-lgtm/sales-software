@@ -20,27 +20,15 @@ const workerOpsRoutes = require('./routes/workerOpsRoutes');
 
 const app = express();
 
-app.set('trust proxy', 1);
+// --- Production & Railway Config ---
+app.set('trust proxy', 1); // For accurate IP tracking behind load balancers
 
-// ✅ ONLY THIS ORIGIN (IMPORTANT)
-app.use(cors({
-    origin: 'https://sales1-software.kiaansoftware.com',
-    credentials: true
-}));
-
-// ✅ Preflight fix (IMPORTANT)
-app.use((req, res, next) => {
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
-
-// Body parsers
-app.use(express.json({ limit: '10mb' }));
+// Middlewares
+app.use(cors());
+app.use(express.json({ limit: '10mb' })); // Increased limit for photo data-urls
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Routes
+// Routes Registration
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/leads', leadRoutes);
 app.use('/api/v1/jobs', jobRoutes);
@@ -56,18 +44,15 @@ app.use('/api/v1/guest', guestRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
 app.use('/api/v1/worker', workerOpsRoutes);
 
-// Health
+// Health Check Route
 app.get('/api/v1/health', (req, res) => {
-    res.json({ success: true, message: 'OK' });
+    res.status(200).json({ success: true, message: 'Server is running perfectly!' });
 });
 
-// Error handler
+// Global Error Handler (Fallback)
 app.use((err, req, res, next) => {
-    console.error(err.message);
-    res.status(500).json({
-        success: false,
-        message: err.message
-    });
+    console.error(err.stack);
+    res.status(500).json({ success: false, message: 'Something went wrong!', error: err.message });
 });
 
-module.exports = app;
+module.exports = app; 
