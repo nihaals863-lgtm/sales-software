@@ -20,29 +20,19 @@ const workerOpsRoutes = require('./routes/workerOpsRoutes');
 
 const app = express();
 
-// --- Production Config ---
 app.set('trust proxy', 1);
 
-// ✅ CORS (simple & stable)
+// ✅ ONLY THIS ORIGIN (IMPORTANT)
 app.use(cors({
-    origin: [
-        'http://sales1-software.kiaansoftware.com',
-        'https://sales1-software.kiaansoftware.com'
-    ],
+    origin: 'https://sales1-software.kiaansoftware.com',
     credentials: true
 }));
 
-// ✅ Manual headers + preflight fix (IMPORTANT)
+// ✅ Preflight fix (IMPORTANT)
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', 'https://sales1-software.kiaansoftware.com');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
     if (req.method === 'OPTIONS') {
-        return res.sendStatus(200); // 👈 preflight fix
+        return res.sendStatus(200);
     }
-
     next();
 });
 
@@ -66,21 +56,17 @@ app.use('/api/v1/guest', guestRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
 app.use('/api/v1/worker', workerOpsRoutes);
 
-// Health Check
+// Health
 app.get('/api/v1/health', (req, res) => {
-    res.status(200).json({
-        success: true,
-        message: 'Server is running perfectly!'
-    });
+    res.json({ success: true, message: 'OK' });
 });
 
-// Global Error Handler
+// Error handler
 app.use((err, req, res, next) => {
-    console.error('🔥 ERROR:', err.message);
+    console.error(err.message);
     res.status(500).json({
         success: false,
-        message: 'Something went wrong!',
-        error: err.message
+        message: err.message
     });
 });
 
