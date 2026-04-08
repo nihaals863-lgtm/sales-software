@@ -87,10 +87,22 @@ const registerUser = async (req, res) => {
 const loginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+
+        if (!normalizedEmail || !password) {
+            return res.status(400).json({ success: false, message: "Email and password are required" });
+        }
 
         // 1. Find User by Email
-        const user = await prisma.user.findFirst({
-            where: { email: email.trim() }
+        const user = await prisma.user.findUnique({
+            where: { email: normalizedEmail },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+                password: true
+            }
         });
 
         if (!user) {

@@ -355,16 +355,40 @@ const deleteProfessional = async (req, res) => {
 
 const getProfile = async (req, res) => {
     try {
+        const baseSelect = {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            role: true,
+            isAvailable: true,
+            lat: true,
+            lng: true,
+            city: true,
+            state: true,
+            address: true,
+            pincode: true,
+            isTrackingEnabled: true,
+            businessName: true,
+            bio: true,
+            experience: true,
+            serviceRadius: true,
+            rating: true,
+            plan: true,
+            categories: { include: { category: true } }
+        };
+
         const user = await prisma.user.findUnique({
             where: { id: req.user.id },
-            include: {
-                plan: true,
-                categories: { include: { category: true } },
-                upgradeRequests: {
-                    where: { status: 'PENDING' },
-                    include: { plan: true }
+            select: req.user.role === 'WORKER'
+                ? {
+                    ...baseSelect,
+                    upgradeRequests: {
+                        where: { status: 'PENDING' },
+                        include: { plan: true }
+                    }
                 }
-            }
+                : baseSelect
         });
         res.status(200).json({ success: true, data: user });
     } catch (err) {
