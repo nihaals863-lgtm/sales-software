@@ -5,6 +5,21 @@ const generateShortId = (prefix) => {
     return `${prefix}-${Math.floor(100000 + Math.random() * 900000)}`;
 };
 
+const LOCATION_FALLBACKS = [
+    { key: 'burhanpur', lat: 21.3119, lng: 76.2304 },
+    { key: 'indore', lat: 22.7196, lng: 75.8577 },
+    { key: 'bhopal', lat: 23.2599, lng: 77.4126 },
+    { key: 'ujjain', lat: 23.1765, lng: 75.7885 },
+    { key: 'dewas', lat: 22.9676, lng: 76.0534 },
+];
+
+const inferCoordsFromLocation = (text) => {
+    const raw = String(text || '').toLowerCase();
+    if (!raw) return null;
+    const hit = LOCATION_FALLBACKS.find((c) => raw.includes(c.key));
+    return hit ? { latitude: hit.lat, longitude: hit.lng } : null;
+};
+
 // @route   GET /api/v1/jobs
 // @desc    Get all jobs (ADMIN) or professional-specific jobs (WORKER)
 const getJobs = async (req, res) => {
@@ -29,7 +44,7 @@ const getJobs = async (req, res) => {
                     worker: { select: { name: true } },
                     photos: true,
                     estimate: true,
-                    invoices: { orderBy: { createdAt: 'desc' }, take: 1 },
+                    invoices: true,
                     inspection: true,
                     chats: { select: { id: true } },
                     lead: { include: { category: true, customer: { select: { name: true, phone: true } } } },
@@ -45,7 +60,7 @@ const getJobs = async (req, res) => {
                     worker: { select: { name: true } },
                     photos: true,
                     estimate: true,
-                    invoices: { orderBy: { createdAt: 'desc' }, take: 1 },
+                    invoices: true,
                     inspection: true,
                     chats: { select: { id: true } },
                     lead: { include: { category: true, customer: { select: { name: true, phone: true } } } },
@@ -63,15 +78,23 @@ const getJobs = async (req, res) => {
                 userId: uid,
                 jobWorkerId: j.workerId,
             });
-            const invoice = j.invoices?.[0] || null;
+            const invoice = j.invoices || null;
+            const inferred = inferCoordsFromLocation(j.location || j.lead?.location);
+            const effectiveLat = j.latitude ?? j.lead?.latitude ?? inferred?.latitude ?? null;
+            const effectiveLng = j.longitude ?? j.lead?.longitude ?? inferred?.longitude ?? null;
             return {
                 ...j,
+                latitude: effectiveLat,
+                longitude: effectiveLng,
                 photos,
                 invoice,
-                customerName: j.customer?.name || j.guestName || 'Valued Customer',
+                customerLat: effectiveLat,
+                customerLng: effectiveLng,
+                location: j.location || j.lead?.location || '—',
+                customerName: j.customer?.name || j.lead?.customer?.name || j.guestName || 'Valued Customer',
                 customerPhone: j.customer?.phone || j.guestPhone || null,
                 customerEmail: j.customer?.email || j.guestEmail || '—',
-                customerAddress: j.customer?.address || j.location || '—',
+                customerAddress: j.customer?.address || j.location || j.lead?.location || '—',
                 workerName: j.worker?.name || 'Unassigned',
                 chatId: j.chats?.id || null,
                 displayId: j.jobNo || (j.id ? `JB-${String(j.id).slice(-4).toUpperCase()}` : 'JB-0000'),
@@ -235,11 +258,15 @@ const submitInspection = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Not authorized' });
         }
         const jobId = existingJob.id;
+        const triagePayload =
+            triageAnswers == null
+                ? null
+                : (typeof triageAnswers === 'string' ? triageAnswers : JSON.stringify(triageAnswers));
 
         const inspection = await prisma.jobInspection.upsert({
             where: { jobId },
-            update: { notes: notes || '', triageAnswers, signature },
-            create: { jobId, notes: notes || '', triageAnswers, signature }
+            update: { notes: notes || '', triageAnswers: triagePayload, signature },
+            create: { jobId, notes: notes || '', triageAnswers: triagePayload, signature }
         });
 
         res.status(200).json({ success: true, data: inspection });
@@ -254,6 +281,10 @@ const createEstimate = async (req, res) => {
         const param = req.params.id;
         const user = req.user;
         const { amount, details, materials, laborHours, measurements } = req.body;
+        const materialsPayload =
+            materials == null ? null : (typeof materials === 'string' ? materials : JSON.stringify(materials));
+        const measurementsPayload =
+            measurements == null ? null : (typeof measurements === 'string' ? measurements : JSON.stringify(measurements));
 
         const existingJob = await prisma.job.findFirst({
             where: { OR: [{ id: param }, { jobNo: param }] },
@@ -271,17 +302,17 @@ const createEstimate = async (req, res) => {
             update: {
                 amount: parseFloat(amount) || 0,
                 details: details || '',
-                materials,
+                materials: materialsPayload,
                 laborHours: parseFloat(laborHours) || null,
-                measurements
+                measurements: measurementsPayload
             },
             create: {
                 jobId: jobId,
                 amount: parseFloat(amount) || 0,
                 details: details || '',
-                materials,
+                materials: materialsPayload,
                 laborHours: parseFloat(laborHours) || null,
-                measurements
+                measurements: measurementsPayload
             }
         });
 
@@ -293,7 +324,7 @@ const createEstimate = async (req, res) => {
         res.status(200).json({ success: true, data: estimate });
     } catch (err) {
         console.error("Estimate Error:", err);
-        res.status(500).json({ success: false, message: 'Estimate creation failed' });
+        res.status(500).json({ success: false, message: err.message || 'Estimate creation failed' });
     }
 };
 
@@ -326,8 +357,16 @@ const createInvoice = async (req, res) => {
             else if (milestone === 'FINAL_35') invoiceAmount = total * 0.35;
         }
 
-        const invoice = await prisma.jobInvoice.create({
-            data: {
+        // Schema keeps one invoice per job (jobId unique), so update existing if present.
+        const invoice = await prisma.jobInvoice.upsert({
+            where: { jobId },
+            update: {
+                totalAmount: parseFloat(totalAmount) || 0,
+                amount: invoiceAmount,
+                milestone: milestone || 'SINGLE',
+                status: 'UNPAID'
+            },
+            create: {
                 jobId,
                 totalAmount: parseFloat(totalAmount) || 0,
                 amount: invoiceAmount,
@@ -344,7 +383,7 @@ const createInvoice = async (req, res) => {
         res.status(200).json({ success: true, data: invoice });
     } catch (err) {
         console.error("Invoice Creation Error:", err);
-        res.status(500).json({ success: false, message: 'Invoice creation failed' });
+        res.status(500).json({ success: false, message: err.message || 'Invoice creation failed' });
     }
 };
 
@@ -446,6 +485,8 @@ const getJobsForMap = async (req, res) => {
                 location: j.location,
                 latitude: j.latitude,
                 longitude: j.longitude,
+                customerLat: j.latitude,
+                customerLng: j.longitude,
                 scheduledDate: j.scheduledDate,
                 customerName: j.customer?.name || j.guestName || 'Customer',
                 workerName: j.worker?.name || 'Unassigned',
@@ -498,6 +539,8 @@ const getJobById = async (req, res) => {
         const data = {
             ...job,
             photos,
+            customerLat: job.latitude ?? null,
+            customerLng: job.longitude ?? null,
             customerName: job.customer?.name || job.guestName || 'Valued Customer',
             customerPhone: job.customer?.phone || job.guestPhone || null,
             workerName: job.worker?.name || 'Unassigned',
@@ -737,6 +780,39 @@ const getInvoices = async (req, res) => {
     }
 };
 
+const updateInvoiceStatus = async (req, res) => {
+    try {
+        const { invoiceId } = req.params;
+        const { status } = req.body || {};
+        const user = req.user;
+
+        const nextStatus = String(status || '').toUpperCase();
+        if (!['PAID', 'UNPAID'].includes(nextStatus)) {
+            return res.status(400).json({ success: false, message: 'Status must be PAID or UNPAID' });
+        }
+
+        const existing = await prisma.jobInvoice.findUnique({
+            where: { id: invoiceId },
+            include: { job: { select: { workerId: true } } },
+        });
+        if (!existing) {
+            return res.status(404).json({ success: false, message: 'Invoice not found' });
+        }
+        if (user.role === 'WORKER' && existing.job?.workerId !== user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized to update this invoice' });
+        }
+
+        const updated = await prisma.jobInvoice.update({
+            where: { id: invoiceId },
+            data: { status: nextStatus },
+        });
+        res.status(200).json({ success: true, data: updated });
+    } catch (err) {
+        console.error('updateInvoiceStatus error:', err);
+        res.status(500).json({ success: false, message: err.message || 'Failed to update invoice status' });
+    }
+};
+
 module.exports = {
     getJobs,
     getJobById,
@@ -749,6 +825,7 @@ module.exports = {
     deleteJob,
     getEstimates,
     getInvoices,
+    updateInvoiceStatus,
     getJobHistory,
     addJobPhoto,
     getJobsForMap

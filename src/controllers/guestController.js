@@ -272,6 +272,8 @@ const trackRequest = async (req, res) => {
                     } : null,
                     customerLat: job.latitude ?? null,
                     customerLng: job.longitude ?? null,
+                    professionalLat: job.worker?.lat ?? null,
+                    professionalLng: job.worker?.lng ?? null,
                     jobId: job.id,
                     isReviewed: !!(await prisma.reviews.findUnique({ where: { job_id: job.id } })),
                     chatId: (await prisma.chats.findUnique({ where: { job_id: job.id } }))?.id
@@ -293,8 +295,10 @@ const trackRequest = async (req, res) => {
                     liveLat: lead.job.worker.lat,
                     liveLng: lead.job.worker.lng
                 } : null,
-                customerLat: lead.latitude ?? lead.job?.latitude ?? null,
-                customerLng: lead.longitude ?? lead.job?.longitude ?? null,
+                customerLat: lead.job?.latitude ?? lead.latitude ?? null,
+                customerLng: lead.job?.longitude ?? lead.longitude ?? null,
+                professionalLat: lead.job?.worker?.lat ?? null,
+                professionalLng: lead.job?.worker?.lng ?? null,
                 jobId: lead.job?.id,
                 isReviewed: lead.job ? !!(await prisma.reviews.findUnique({ where: { job_id: lead.job.id } })) : false,
                 chatId: lead.job ? (await prisma.chats.findUnique({ where: { job_id: lead.job.id } }))?.id : null
@@ -303,6 +307,66 @@ const trackRequest = async (req, res) => {
     } catch (error) {
         console.error("❌ [GUEST TRACK] Error:", error);
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @route   GET /api/v1/guest/live/:token
+// @desc    Lightweight live tracking payload for guest/customer view
+const getLiveTracking = async (req, res) => {
+    try {
+        const { token } = req.params;
+
+        const lead = await prisma.lead.findUnique({
+            where: { sessionToken: token },
+            include: {
+                job: {
+                    include: {
+                        worker: { select: { id: true, name: true, lat: true, lng: true, updatedAt: true } }
+                    }
+                }
+            }
+        });
+
+        const job =
+            lead?.job ||
+            (await prisma.job.findFirst({
+                where: { sessionToken: token },
+                include: {
+                    worker: { select: { id: true, name: true, lat: true, lng: true, updatedAt: true } }
+                }
+            }));
+
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Live tracking unavailable for this token.' });
+        }
+
+        const customerLat = job.latitude ?? lead?.latitude ?? null;
+        const customerLng = job.longitude ?? lead?.longitude ?? null;
+        const professionalLat = job.worker?.lat ?? null;
+        const professionalLng = job.worker?.lng ?? null;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                jobId: job.id,
+                jobNo: job.jobNo,
+                status: job.status,
+                customerLat,
+                customerLng,
+                professionalId: job.worker?.id ?? null,
+                professionalName: job.worker?.name ?? null,
+                professionalLat,
+                professionalLng,
+                professionalUpdatedAt: job.worker?.updatedAt ?? null,
+                directionsUrl:
+                    customerLat != null && customerLng != null
+                        ? `https://www.google.com/maps/dir/?api=1&destination=${customerLat},${customerLng}`
+                        : null
+            }
+        });
+    } catch (error) {
+        console.error('Guest live tracking error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error' });
     }
 };
 
@@ -376,5 +440,6 @@ module.exports = {
     getNearby,
     createRequest,
     trackRequest,
-    submitReview
+    submitReview,
+    getLiveTracking
 };
