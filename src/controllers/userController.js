@@ -33,7 +33,7 @@ const getProfessionals = async (req, res) => {
                 earnings: completedCount * 150, // Real calculation based on completions
                 rating: w.rating || 0,
                 lastLocation: w.lat && w.lng ? { lat: w.lat, lng: w.lng } : null,
-                trackingEnabled: !!(w.isTrackingEnabled ?? (w.lat && w.lng))
+                trackingEnabled: !!(w.lat && w.lng)
             };
         }));
 
@@ -59,8 +59,7 @@ const updateLocation = async (req, res) => {
             where: { id: userId },
             data: {
                 lat: numLat,
-                lng: numLng,
-                isTrackingEnabled: true
+                lng: numLng
             }
         });
 
@@ -73,7 +72,7 @@ const updateLocation = async (req, res) => {
                 lat: user.lat,
                 lng: user.lng,
                 updatedAt: user.updatedAt,
-                trackingEnabled: !!user.isTrackingEnabled
+                trackingEnabled: !!(user.lat && user.lng)
             });
         } catch (socketErr) {
             console.warn('Socket location emit skipped:', socketErr.message);
@@ -121,7 +120,7 @@ const getProfessionalsLocations = async (req, res) => {
                 category: w.categories?.[0]?.category?.name || 'General',
                 isAvailable: w.isAvailable,
                 onlineStatus: w.isAvailable ? 'Online' : 'Offline',
-                trackingEnabled: !!(w.isTrackingEnabled ?? false),
+                trackingEnabled: !!(w.lat && w.lng),
                 lat: w.lat,
                 lng: w.lng,
                 updatedAt: w.updatedAt,
@@ -368,7 +367,6 @@ const getProfile = async (req, res) => {
             state: true,
             address: true,
             pincode: true,
-            isTrackingEnabled: true,
             businessName: true,
             bio: true,
             experience: true,
@@ -390,7 +388,14 @@ const getProfile = async (req, res) => {
                 }
                 : baseSelect
         });
-        res.status(200).json({ success: true, data: user });
+        res.status(200).json({
+            success: true,
+            data: {
+                ...user,
+                trackingEnabled: !!(user?.lat && user?.lng),
+                isTrackingEnabled: !!(user?.lat && user?.lng)
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Profile fetch failed' });
     }
@@ -402,47 +407,38 @@ const updateProfile = async (req, res) => {
             name, email, phone, address, city, state, pincode,
             isAvailable, password, businessName, bio,
             availability, experience, serviceRadius, location,
-            trackingEnabled, isTrackingEnabled, payoutSettings
+            trackingEnabled, isTrackingEnabled
         } = req.body;
 
         const dataToUpdate = {
-            name, email, phone, address,
+            name,
+            email,
+            phone,
+            address,
             city: city || (location ? location.split(',')[0]?.trim() : undefined),
             state: state || (location ? location.split(',')[1]?.trim() : undefined),
-            pincode, isAvailable, businessName, bio,
-            availability, experience,
-            serviceRadius: serviceRadius ? parseInt(serviceRadius) : undefined,
-            isTrackingEnabled: typeof isTrackingEnabled === 'boolean'
-                ? isTrackingEnabled
-                : (typeof trackingEnabled === 'boolean' ? trackingEnabled : undefined)
+            pincode,
+            isAvailable,
+            businessName,
+            bio,
+            availability,
+            experience,
+            serviceRadius: serviceRadius ? parseInt(serviceRadius) : undefined
         };
+
+        // Compatibility: this schema does not store explicit tracking flag.
+        // Accept incoming toggle payload but do not write unknown DB fields.
+        if (typeof isTrackingEnabled === 'boolean' || typeof trackingEnabled === 'boolean') {
+            // no-op
+        }
+
+        Object.keys(dataToUpdate).forEach((key) => {
+            if (dataToUpdate[key] === undefined) delete dataToUpdate[key];
+        });
 
         if (password && password.trim() !== '') {
             const salt = await bcrypt.genSalt(10);
             dataToUpdate.password = await bcrypt.hash(password, salt);
-        }
-
-        if (payoutSettings !== undefined && payoutSettings !== null) {
-            const existing = await prisma.user.findUnique({
-                where: { id: req.user.id },
-                select: { payoutSettings: true }
-            });
-            const prev =
-                existing?.payoutSettings && typeof existing.payoutSettings === 'object' && !Array.isArray(existing.payoutSettings)
-                    ? existing.payoutSettings
-                    : {};
-            let incoming = payoutSettings;
-            if (typeof incoming === 'string') {
-                try {
-                    incoming = JSON.parse(incoming);
-                } catch {
-                    return res.status(400).json({ success: false, message: 'Invalid payoutSettings JSON' });
-                }
-            }
-            if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) {
-                return res.status(400).json({ success: false, message: 'payoutSettings must be an object' });
-            }
-            dataToUpdate.payoutSettings = { ...prev, ...incoming };
         }
 
         const updated = await prisma.user.update({
