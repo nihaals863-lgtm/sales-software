@@ -66,6 +66,14 @@ app.get('/api/v1/health', (req, res) => {
     });
 });
 
+app.get("/", (req, res) => {
+  res.send("Server is live 🚀");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK" });
+});
+
 // Global error handler
 app.use((err, req, res, next) => {
     console.error('🔥 ERROR:', err.message);
