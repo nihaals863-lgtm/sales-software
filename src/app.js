@@ -20,10 +20,10 @@ const workerOpsRoutes = require('./routes/workerOpsRoutes');
 
 const app = express();
 
-// --- Production & Railway Config ---
+// --- Production Config ---
 app.set('trust proxy', 1);
 
-// ✅ Allowed Origins (Production + Local)
+// ✅ Allowed Origins
 const allowedOrigins = [
     'http://sales1-software.kiaansoftware.com',
     'https://sales1-software.kiaansoftware.com',
@@ -31,11 +31,10 @@ const allowedOrigins = [
     'http://127.0.0.1:3000'
 ];
 
-// ✅ CORS Middleware (Secure Setup)
+// ✅ CORS Setup (FIXED)
 app.use(cors({
     origin: function (origin, callback) {
-        // allow requests with no origin (mobile apps, postman)
-        if (!origin) return callback(null, true);
+        if (!origin) return callback(null, true); // allow Postman/mobile
 
         if (allowedOrigins.includes(origin)) {
             return callback(null, true);
@@ -47,14 +46,11 @@ app.use(cors({
     credentials: true
 }));
 
-// Optional: Handle preflight requests explicitly
-app.options('*', cors());
-
 // Middlewares
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Routes Registration
+// Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/leads', leadRoutes);
 app.use('/api/v1/jobs', jobRoutes);
@@ -70,7 +66,7 @@ app.use('/api/v1/guest', guestRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
 app.use('/api/v1/worker', workerOpsRoutes);
 
-// Health Check Route
+// Health Check
 app.get('/api/v1/health', (req, res) => {
     res.status(200).json({
         success: true,
