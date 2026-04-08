@@ -21,11 +21,37 @@ const workerOpsRoutes = require('./routes/workerOpsRoutes');
 const app = express();
 
 // --- Production & Railway Config ---
-app.set('trust proxy', 1); // For accurate IP tracking behind load balancers
+app.set('trust proxy', 1);
+
+// ✅ Allowed Origins (Production + Local)
+const allowedOrigins = [
+    'http://sales1-software.kiaansoftware.com',
+    'https://sales1-software.kiaansoftware.com',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+];
+
+// ✅ CORS Middleware (Secure Setup)
+app.use(cors({
+    origin: function (origin, callback) {
+        // allow requests with no origin (mobile apps, postman)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        } else {
+            return callback(new Error('CORS not allowed: ' + origin));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    credentials: true
+}));
+
+// Optional: Handle preflight requests explicitly
+app.options('*', cors());
 
 // Middlewares
-app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Increased limit for photo data-urls
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Routes Registration
@@ -46,13 +72,20 @@ app.use('/api/v1/worker', workerOpsRoutes);
 
 // Health Check Route
 app.get('/api/v1/health', (req, res) => {
-    res.status(200).json({ success: true, message: 'Server is running perfectly!' });
+    res.status(200).json({
+        success: true,
+        message: 'Server is running perfectly!'
+    });
 });
 
-// Global Error Handler (Fallback)
+// Global Error Handler
 app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ success: false, message: 'Something went wrong!', error: err.message });
+    console.error('🔥 ERROR:', err.message);
+    res.status(500).json({
+        success: false,
+        message: 'Something went wrong!',
+        error: err.message
+    });
 });
 
 module.exports = app;
