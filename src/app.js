@@ -23,30 +23,30 @@ const app = express();
 // --- Production Config ---
 app.set('trust proxy', 1);
 
-// ✅ Allowed Origins
-const allowedOrigins = [
-    'http://sales1-software.kiaansoftware.com',
-    'https://sales1-software.kiaansoftware.com',
-    'http://localhost:3000',
-    'http://127.0.0.1:3000'
-];
-
-// ✅ CORS Setup (FIXED)
+// ✅ CORS (simple & stable)
 app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true); // allow Postman/mobile
-
-        if (allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        } else {
-            return callback(new Error('CORS not allowed: ' + origin));
-        }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    origin: [
+        'http://sales1-software.kiaansoftware.com',
+        'https://sales1-software.kiaansoftware.com'
+    ],
     credentials: true
 }));
 
-// Middlewares
+// ✅ Manual headers + preflight fix (IMPORTANT)
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', 'https://sales1-software.kiaansoftware.com');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200); // 👈 preflight fix
+    }
+
+    next();
+});
+
+// Body parsers
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
